@@ -168,6 +168,54 @@ function lerpHsv(
   }
 }
 
+
+class WebWorkerTimer {
+  private worker: Worker | null = null
+
+  constructor(private intervalMs: number, private onTick: () => void) {}
+
+  public start() {
+    this.stop()
+    const script = `
+      let timer = null;
+      self.onmessage = function(e) {
+        if (e.data.action === 'start') {
+          if (timer) clearInterval(timer);
+          timer = setInterval(function() {
+            self.postMessage('tick');
+          }, e.data.interval);
+        } else if (e.data.action === 'stop') {
+          if (timer) clearInterval(timer);
+          timer = null;
+        }
+      };
+    `
+    try {
+      const blob = new Blob([script], { type: 'application/javascript' })
+      const url = URL.createObjectURL(blob)
+      this.worker = new Worker(url)
+      this.worker.onmessage = (e) => {
+        if (e.data === 'tick') {
+          this.onTick()
+        }
+      }
+      this.worker.postMessage({ action: 'start', interval: this.intervalMs })
+    } catch (e) {
+      console.warn('Web Worker timer fallback:', e)
+    }
+  }
+
+  public stop() {
+    if (this.worker) {
+      try {
+        this.worker.postMessage({ action: 'stop' })
+        this.worker.terminate()
+      } catch {}
+      this.worker = null
+    }
+  }
+}
+
 export class MusicSyncEngine {
   private config: SyncEngineConfig = {
     mode: 'spectrum',
@@ -190,6 +238,11 @@ export class MusicSyncEngine {
   private animationFrameId: number | null = null
   private transmitTimerId: ReturnType<typeof setInterval> | null = null
   private backgroundDspTimerId: ReturnType<typeof setInterval> | null = null
+  private silentOscillator: OscillatorNode | null = null
+  private silentGain: GainNode | null = null
+  private dummyGain: GainNode | null = null
+  private dspWorkerTimer: WebWorkerTimer | null = null
+  private transmitWorkerTimer: WebWorkerTimer | null = null
 
   // DSP state
   private freqData: Uint8Array = new Uint8Array(512)
@@ -262,7 +315,7 @@ export class MusicSyncEngine {
             audio: true,
             video: true
           })
-          stream.getVideoTracks().forEach((track) => track.stop())
+          stream.getVideoTracks().forEach((track) => { track.enabled = false })
         } catch (displayMediaErr) {
           console.warn('getDisplayMedia failed, trying desktopCapturer fallback:', displayMediaErr)
           const sources = (await window.api.getDesktopSources?.()) || []
@@ -286,7 +339,7 @@ export class MusicSyncEngine {
             } as unknown as MediaTrackConstraints
           }
           stream = await navigator.mediaDevices.getUserMedia(constraints)
-          stream.getVideoTracks().forEach((track) => track.stop())
+          stream.getVideoTracks().forEach((track) => { track.enabled = false })
         }
       } else {
         // Microphone or selected audio input device
@@ -311,6 +364,23 @@ export class MusicSyncEngine {
       this.analyser.fftSize = 1024
       this.analyser.smoothingTimeConstant = 0.5
       this.sourceNode.connect(this.analyser)
+
+      // Connect analyser through zero-gain node to destination:
+      // Chromium pauses MediaStream capture when hidden/minimized if the Web Audio graph
+      // has no route to destination. Route to destination with gain 0 to keep the capture graph active.
+      this.dummyGain = this.audioContext.createGain()
+      this.dummyGain.gain.setValueAtTime(0, this.audioContext.currentTime)
+      this.analyser.connect(this.dummyGain)
+      this.dummyGain.connect(this.audioContext.destination)
+
+      // Silent oscillator keep-alive to destination:
+      // Guarantees Chromium keeps the high-priority audio engine ticking in background.
+      this.silentOscillator = this.audioContext.createOscillator()
+      this.silentGain = this.audioContext.createGain()
+      this.silentGain.gain.setValueAtTime(0, this.audioContext.currentTime)
+      this.silentOscillator.connect(this.silentGain)
+      this.silentGain.connect(this.audioContext.destination)
+      this.silentOscillator.start()
 
       this.freqData = new Uint8Array(this.analyser.frequencyBinCount)
 
@@ -340,6 +410,38 @@ export class MusicSyncEngine {
     if (this.backgroundDspTimerId !== null) {
       clearInterval(this.backgroundDspTimerId)
       this.backgroundDspTimerId = null
+    }
+
+    if (this.dspWorkerTimer) {
+      this.dspWorkerTimer.stop()
+      this.dspWorkerTimer = null
+    }
+
+    if (this.transmitWorkerTimer) {
+      this.transmitWorkerTimer.stop()
+      this.transmitWorkerTimer = null
+    }
+
+    if (this.silentOscillator) {
+      try {
+        this.silentOscillator.stop()
+        this.silentOscillator.disconnect()
+      } catch {}
+      this.silentOscillator = null
+    }
+
+    if (this.silentGain) {
+      try {
+        this.silentGain.disconnect()
+      } catch {}
+      this.silentGain = null
+    }
+
+    if (this.dummyGain) {
+      try {
+        this.dummyGain.disconnect()
+      } catch {}
+      this.dummyGain = null
     }
 
     if (this.sourceNode) {
@@ -379,24 +481,35 @@ export class MusicSyncEngine {
     }
     this.animationFrameId = requestAnimationFrame(renderLoop)
 
-    // 2. Continuous DSP Audio Analysis Engine (~30 Hz / 33ms)
-    // CRITICAL: In Chromium/Electron, requestAnimationFrame stops completely when minimized or hidden.
-    // This dedicated timer runs UNCONDITIONALLY in the background, ensuring audio FFT, beat detection,
-    // and color calculation NEVER PAUSE when the window is minimized or hidden in the system tray.
+    // 2. Web Worker continuous DSP timer (runs on separate OS background thread, completely immune to Chromium minimize/background throttling)
+    this.dspWorkerTimer = new WebWorkerTimer(33, () => {
+      if (!this.isRunning) return
+      if (this.audioContext && this.audioContext.state !== 'running') {
+        this.audioContext.resume().catch(() => {})
+      }
+      this.processAudioFrame()
+    })
+    this.dspWorkerTimer.start()
+
+    // 3. Web Worker UDP transmission timer (~13 Hz / 75ms)
+    this.transmitWorkerTimer = new WebWorkerTimer(75, () => {
+      if (!this.isRunning) return
+      this.processAudioFrame()
+      this.sendLightUpdate()
+    })
+    this.transmitWorkerTimer.start()
+
+    // 4. Secondary fallback interval timers
     this.backgroundDspTimerId = setInterval(() => {
       if (!this.isRunning) return
-      // Prevent Chromium from silently suspending AudioContext in background
-      if (this.audioContext && this.audioContext.state === 'suspended') {
+      if (this.audioContext && this.audioContext.state !== 'running') {
         this.audioContext.resume().catch(() => {})
       }
       this.processAudioFrame()
     }, 33)
 
-    // 3. WiZ UDP transmission loop (~13 Hz / 75ms)
-    // Dispatches real-time UDP commands to bulbs in background and foreground alike
     this.transmitTimerId = setInterval(() => {
       if (!this.isRunning) return
-      this.processAudioFrame()
       this.sendLightUpdate()
     }, 75)
   }
@@ -648,3 +761,14 @@ export class MusicSyncEngine {
 
 // Singleton instance
 export const musicSyncEngine = new MusicSyncEngine()
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (musicSyncEngine.getIsRunning()) {
+      const ctx = (musicSyncEngine as any).audioContext as AudioContext | null
+      if (ctx && ctx.state !== 'running') {
+        ctx.resume().catch(() => {})
+      }
+    }
+  })
+}

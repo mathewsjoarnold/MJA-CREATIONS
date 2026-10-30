@@ -10,6 +10,13 @@ import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, shell } from 'elect
 import log from 'electron-log'
 import { join } from 'path'
 
+// Prevent Chromium from throttling timers, suspending audio, or backgrounding renderers when minimized/hidden
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
+
 function createWindow() {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -30,6 +37,8 @@ function createWindow() {
       backgroundThrottling: false
     }
   })
+
+  mainWindow.webContents.setBackgroundThrottling(false)
 
   ipcMain.on('show-window', () => {
     mainWindow.show()
@@ -137,8 +146,7 @@ if (!gotTheLock) {
     })
 
     mainWindow.on('minimize', () => {
-      log.info('Hiding app to tray...')
-      mainWindow.hide()
+      log.info('Window minimized to taskbar')
     })
 
     app.on('activate', function () {

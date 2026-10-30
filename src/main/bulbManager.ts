@@ -483,8 +483,7 @@ class BulbManager {
     this.saveConfig()
   }
 
-  @needsViewUpdate('set custom color')
-    // Fast streaming sync for music visualizer
+    // Fast streaming sync for music visualizer (no disk logging or React store re-render on streaming frames)
   public syncBulbColor(r: number, g: number, b: number, dimming?: number, targetIp?: string) {
     const params: { r: number; g: number; b: number; dimming?: number } = {
       r: Math.max(0, Math.min(255, Math.round(r))),
@@ -507,6 +506,7 @@ class BulbManager {
     }
   }
 
+  @needsViewUpdate('set custom color')
   public async setCustomColor(colorId: number) {
     const bulb = this.getActiveBulbInstance()
     const state = this.getActiveBulb()
