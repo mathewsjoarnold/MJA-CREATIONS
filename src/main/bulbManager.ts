@@ -495,7 +495,7 @@ class BulbManager {
       params.dimming = Math.max(10, Math.min(100, Math.round(dimming)))
     }
 
-    if (targetIp === 'all') {
+    if (targetIp === 'all' || !targetIp) {
       for (const bulb of this.bulbs.values()) {
         bulb.syncPilot(params).catch(() => {})
       }

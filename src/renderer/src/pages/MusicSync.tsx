@@ -36,7 +36,7 @@ export default function MusicSync() {
   const [audioSource, setAudioSource] = useState<AudioSourceType>('loopback')
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
-  const [targetBulb, setTargetBulb] = useState<string>(activeBulb?.ip || '')
+  const [targetBulb, setTargetBulb] = useState<string>('all')
 
   const [sensitivity, setSensitivity] = useState<number>(1.2)
   const [minBrightness, setMinBrightness] = useState<number>(15)

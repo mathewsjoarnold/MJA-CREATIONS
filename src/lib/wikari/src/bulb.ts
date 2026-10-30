@@ -80,7 +80,12 @@ export class Bulb {
 		this.macIdentifier = options.macIdentifier ?? getRandomMac();
 		if (options.responseTimeout) this.responseTimeout = options.responseTimeout;
 
-		if (Bulb.state == WikariState.IDLE) this.initClient();
+		if (Bulb.state == WikariState.IDLE || Bulb.state == WikariState.CLOSED) {
+			try {
+				Bulb.client = dgram.createSocket("udp4");
+			} catch {}
+			this.initClient();
+		}
 	}
 
 	static setInstanceState(state: WikariState) {

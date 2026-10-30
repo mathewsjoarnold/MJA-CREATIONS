@@ -189,6 +189,7 @@ export class MusicSyncEngine {
 
   private animationFrameId: number | null = null
   private transmitTimerId: ReturnType<typeof setInterval> | null = null
+  private backgroundDspTimerId: ReturnType<typeof setInterval> | null = null
 
   // DSP state
   private freqData: Uint8Array = new Uint8Array(512)
@@ -336,6 +337,11 @@ export class MusicSyncEngine {
       this.transmitTimerId = null
     }
 
+    if (this.backgroundDspTimerId !== null) {
+      clearInterval(this.backgroundDspTimerId)
+      this.backgroundDspTimerId = null
+    }
+
     if (this.sourceNode) {
       try {
         this.sourceNode.disconnect()
@@ -366,18 +372,31 @@ export class MusicSyncEngine {
   // --- Processing Loops ---
 
   private startLoops() {
-    // 1. High-speed UI & DSP analysis loop (60 FPS)
+    // 1. High-speed UI visualizer animation loop (60 FPS when window is visible)
     const renderLoop = () => {
       if (!this.isRunning) return
-      this.processAudioFrame()
       this.animationFrameId = requestAnimationFrame(renderLoop)
     }
     this.animationFrameId = requestAnimationFrame(renderLoop)
 
-    // 2. WiZ UDP transmission loop (~13 Hz / 75ms)
-    // Avoids overwhelming WiZ bulbs while maintaining responsive sync
+    // 2. Continuous DSP Audio Analysis Engine (~30 Hz / 33ms)
+    // CRITICAL: In Chromium/Electron, requestAnimationFrame stops completely when minimized or hidden.
+    // This dedicated timer runs UNCONDITIONALLY in the background, ensuring audio FFT, beat detection,
+    // and color calculation NEVER PAUSE when the window is minimized or hidden in the system tray.
+    this.backgroundDspTimerId = setInterval(() => {
+      if (!this.isRunning) return
+      // Prevent Chromium from silently suspending AudioContext in background
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {})
+      }
+      this.processAudioFrame()
+    }, 33)
+
+    // 3. WiZ UDP transmission loop (~13 Hz / 75ms)
+    // Dispatches real-time UDP commands to bulbs in background and foreground alike
     this.transmitTimerId = setInterval(() => {
       if (!this.isRunning) return
+      this.processAudioFrame()
       this.sendLightUpdate()
     }, 75)
   }
@@ -597,6 +616,8 @@ export class MusicSyncEngine {
   // --- UDP Transmission to WiZ Bulbs ---
 
   private sendLightUpdate() {
+    // Ensure fresh DSP frame calculation prior to sending
+    this.processAudioFrame()
     const rgb = hsvToRgb(this.currentHsv.h, this.currentHsv.s, this.currentHsv.v)
     const dimming = this.currentDimming
 

@@ -26,7 +26,8 @@ function createWindow() {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       devTools: !app.isPackaged,
-      sandbox: SANDBOX
+      sandbox: SANDBOX,
+      backgroundThrottling: false
     }
   })
 
