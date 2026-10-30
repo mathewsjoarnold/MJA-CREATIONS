@@ -558,6 +558,14 @@ export class Bulb {
 			);
 	}
 
+	/**
+	 * Fast streaming color sync method for music synchronization.
+	 * Sends UDP datagram without blocking or awaiting reply.
+	 */
+	async syncPilot(pilot: Pilot): Promise<GenericResponse> {
+		return await this.sendRaw({ method: "setPilot", params: pilot }, false);
+	}
+
 	// ##################################
 	//   UDP Client related functions
 	// ##################################

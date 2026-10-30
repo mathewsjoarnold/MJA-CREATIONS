@@ -149,7 +149,8 @@
     "information": "Información",
     "settings": "Ajustes",
     "help": "Ayuda",
-    "brightness": "Brillo"
+    "brightness": "Brillo",
+    "musicSync": "Sincronizar Música"
   },
   "modals": {
     "add": "Agregar",
@@ -176,5 +177,13 @@
     "addSuccess": "Foco agregado correctamente",
     "addFailed": "No se pudo conectar al foco",
     "addDuplicate": "Este foco ya está agregado"
+  },
+  "musicSync": {
+    "title": "Sincronizar Música",
+    "subtitle": "Sincroniza tus luces con música y sonido de tu PC en tiempo real",
+    "start": "Iniciar Sincronización",
+    "stop": "Detener Sincronización",
+    "starting": "Iniciando captura de audio...",
+    "captureError": "No se pudo capturar audio. Asegúrate de reproducir sonido o prueba con micrófono."
   }
 }

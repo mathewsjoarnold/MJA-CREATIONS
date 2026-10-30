@@ -85,6 +85,17 @@ class BulbManager {
         return raw as AppConfig
       }
 
+      // Auto-migrate legacy v2 config if present
+      if (raw && raw.bulbIp && !raw.bulbs) {
+        log.info('Migrating legacy v2 config for bulb:', raw.bulbIp)
+        return {
+          bulbs: [{ bulbIp: raw.bulbIp, bulbName: raw.bulbName || 'WiZ Bulb' }],
+          activeBulbIp: raw.bulbIp,
+          customColors: raw.customColors || [],
+          favoriteColors: raw.favoriteColors || [11, 12, 14, 6]
+        }
+      }
+
       log.warn('Config format does not match expected shape, overwriting with fresh config')
     } catch {
       log.warn('Config not found or unreadable, creating new config')
@@ -473,6 +484,29 @@ class BulbManager {
   }
 
   @needsViewUpdate('set custom color')
+    // Fast streaming sync for music visualizer
+  public syncBulbColor(r: number, g: number, b: number, dimming?: number, targetIp?: string) {
+    const params: { r: number; g: number; b: number; dimming?: number } = {
+      r: Math.max(0, Math.min(255, Math.round(r))),
+      g: Math.max(0, Math.min(255, Math.round(g))),
+      b: Math.max(0, Math.min(255, Math.round(b)))
+    }
+    if (dimming !== undefined) {
+      params.dimming = Math.max(10, Math.min(100, Math.round(dimming)))
+    }
+
+    if (targetIp === 'all') {
+      for (const bulb of this.bulbs.values()) {
+        bulb.syncPilot(params).catch(() => {})
+      }
+    } else {
+      const bulb = targetIp ? this.bulbs.get(targetIp) : this.getActiveBulbInstance()
+      if (bulb) {
+        bulb.syncPilot(params).catch(() => {})
+      }
+    }
+  }
+
   public async setCustomColor(colorId: number) {
     const bulb = this.getActiveBulbInstance()
     const state = this.getActiveBulb()

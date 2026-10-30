@@ -6,8 +6,10 @@ export interface IElectronAPI {
   onUpdateBulb: (callback: (state: MultiBulbState) => void) => void
   onShowToast: (callback: (toast: ToastMessage) => void) => void
   getBulbsWhenReady: () => Promise<MultiBulbState>
+  getDesktopSources?: () => Promise<{ id: string; name: string }[]>
 
   // Active bulb operations
+  syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string }) => void
   toggleBulb: () => void
   setBrightness: (brightness: number) => void
   setBulbName: (name: string, ip?: string) => void

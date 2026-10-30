@@ -147,7 +147,8 @@
     "information": "Information",
     "settings": "Settings",
     "help": "Help",
-    "brightness": "Brightness"
+    "brightness": "Brightness",
+    "musicSync": "Music Sync"
   },
   "modals": {
     "add": "Add",
@@ -175,5 +176,13 @@
     "addSuccess": "Bulb added successfully",
     "addFailed": "Could not connect to the bulb",
     "addDuplicate": "This bulb is already added"
+  },
+  "musicSync": {
+    "title": "Music Sync",
+    "subtitle": "Synchronize your lights with music and PC audio in real-time",
+    "start": "Start Music Sync",
+    "stop": "Stop Music Sync",
+    "starting": "Starting audio capture...",
+    "captureError": "Could not capture audio. Please ensure audio is playing or try microphone input."
   }
 }

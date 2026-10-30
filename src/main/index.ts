@@ -6,7 +6,7 @@ import registerIPCEvents from '@main/ipcEvents'
 import initializeLanguage from '@main/localization'
 import initializeLogger from '@main/logger'
 import createTray from '@main/tray'
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, shell } from 'electron'
 import log from 'electron-log'
 import { join } from 'path'
 
@@ -59,8 +59,11 @@ if (!gotTheLock) {
     const windows = BrowserWindow.getAllWindows()
     if (windows.length > 0) {
       const window = windows[0]
-      if (window.isMinimized()) {
+      if (!window.isVisible()) {
         window.show()
+      }
+      if (window.isMinimized()) {
+        window.restore()
       }
       window.focus()
     }
@@ -87,6 +90,33 @@ if (!gotTheLock) {
     initializeLanguage(app)
 
     const mainWindow = createWindow()
+
+    // Enable system loopback audio capture for Music Sync on Windows
+    if (typeof mainWindow.webContents.session.setDisplayMediaRequestHandler === 'function') {
+      mainWindow.webContents.session.setDisplayMediaRequestHandler((_request, callback) => {
+      desktopCapturer
+        .getSources({ types: ['screen'] })
+        .then((sources) => {
+          if (sources.length > 0) {
+            callback({ video: sources[0], audio: 'loopback' })
+          } else {
+            callback({ video: null as any })
+          }
+        })
+        .catch((error) => {
+          log.error('Failed to get desktop capturer sources for audio loopback:', error)
+          callback({ video: null as any })
+        })
+      })
+    }
+
+    // Grant media permissions automatically without prompts
+    mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
+      return permission === 'media' || (permission as string) === 'display-capture'
+    })
+    mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+      callback(permission === 'media' || (permission as string) === 'display-capture')
+    })
 
     // Disable menu completely (prevents showing menu when Alt or Ctrl is pressed)
     if (HIDE_MENU && process.platform !== 'darwin') {

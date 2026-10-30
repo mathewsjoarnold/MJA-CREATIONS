@@ -10,8 +10,11 @@ const api = {
   onShowToast: (callback: (toast: ToastMessage) => void) =>
     ipcRenderer.on('on-show-toast', (_, toast: ToastMessage) => callback(toast)),
   getBulbsWhenReady: () => ipcRenderer.invoke('get-bulbs'),
+  getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
 
   // Active bulb operations
+  syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string }) =>
+    ipcRenderer.send('sync-bulb-color', data),
   toggleBulb: () => ipcRenderer.send('toggle-bulb-state'),
   setBrightness: (brightness: number) => ipcRenderer.send('set-brightness', brightness),
   setBulbName: (name: string, ip?: string) => ipcRenderer.send('set-bulb-name', name, ip),

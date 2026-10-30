@@ -1,6 +1,6 @@
 import i18n from '@i18n'
 import BulbManager from '@main/bulbManager'
-import { app, ipcMain, shell } from 'electron'
+import { app, desktopCapturer, ipcMain, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 
 const registerIPCEvents = (BulbManager: BulbManager) => {
@@ -23,6 +23,10 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
 
   ipcMain.on('add-custom-color', async (_, colorName, colorHex) => {
     await BulbManager.addCustomColor(colorName, colorHex)
+  })
+
+    ipcMain.on('sync-bulb-color', (_, data: { r: number; g: number; b: number; dimming?: number; ip?: string }) => {
+    BulbManager.syncBulbColor(data.r, data.g, data.b, data.dimming, data.ip)
   })
 
   ipcMain.on('set-custom-color', async (_, colorId) => {
@@ -71,6 +75,14 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
   })
 
   // --- Queries ---
+  ipcMain.handle('get-desktop-sources', async () => {
+    try {
+      return await desktopCapturer.getSources({ types: ['screen'] })
+    } catch {
+      return []
+    }
+  })
+
   ipcMain.handle('get-bulbs', () => {
     return BulbManager.getMultiBulbState()
   })
