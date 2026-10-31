@@ -88,11 +88,14 @@ export default function BulbCard({
 
           {isOffline && (
             <span
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30 shrink-0"
-              title="Bulb is offline"
+              className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
+              title="Bulb is offline. App is continuously auto-reconnecting in the background."
             >
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-400"></span>
-              <span>Offline</span>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+              <span>Auto-Reconnecting</span>
             </span>
           )}
 
@@ -116,6 +119,9 @@ export default function BulbCard({
           {isConnecting && (
             <span className="text-[10px] text-blue-400/90 animate-pulse font-medium">Syncing...</span>
           )}
+          {isOffline && (
+            <span className="text-[10px] text-amber-400/90 animate-pulse font-medium">Waiting for Wi-Fi...</span>
+          )}
         </div>
       </div>
 
@@ -134,10 +140,10 @@ export default function BulbCard({
               onReconnect?.()
             }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-white/10 hover:bg-white/20 active:scale-95 text-neutral-200 border border-white/10 transition-all cursor-pointer shadow-sm"
-            title="Retry connecting to this bulb"
+            title="Retry connecting to this bulb now"
           >
-            <LuRefreshCw size={12} className="text-neutral-400" />
-            <span>Reconnect</span>
+            <LuRefreshCw size={12} className="text-amber-400" />
+            <span>Retry Now</span>
           </button>
         ) : (
           <PowerButton isOn={bulb.state} onToggle={onToggle} />

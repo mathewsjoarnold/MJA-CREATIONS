@@ -51,7 +51,7 @@ class BulbManager {
   private discoveryFailed: boolean = false
 
   // Background auto-reconnect timer
-  private reconnectTimer: ReturnType<typeof setInterval> | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   // Window reference
   public window: BrowserWindow
@@ -71,19 +71,23 @@ class BulbManager {
   // --- Pre-populate Known Bulbs so UI never appears empty ---
   private initKnownBulbs() {
     for (const entry of this.appData.bulbs) {
+      if (!entry.mac) {
+        if (entry.bulbIp === '192.168.20.6') entry.mac = 'cc40855ddf56'
+        else if (entry.bulbIp === '192.168.20.7') entry.mac = 'd8a0118e4112'
+      }
       if (!this.bulbStates.has(entry.bulbIp)) {
         this.bulbStates.set(entry.bulbIp, {
           ip: entry.bulbIp,
           name: entry.bulbName || 'WiZ Bulb',
           port: 38899,
-          mac: '',
+          mac: entry.mac || '',
           rssi: 0,
           state: false,
           sceneId: 0,
           homeId: 0,
           roomId: 0,
           rgn: '',
-          moduleName: 'WiZ Bulb',
+          moduleName: entry.moduleName || 'WiZ Bulb',
           fwVersion: '',
           groupId: 0,
           ping: 0,
@@ -106,8 +110,8 @@ class BulbManager {
   private getConfigData(): AppConfig {
     const defaultData: AppConfig = {
       bulbs: [
-        { bulbIp: '192.168.20.6', bulbName: 'ESP25_SHRGB_01' },
-        { bulbIp: '192.168.20.7', bulbName: 'ESP01_SHRGB1C_31' }
+        { bulbIp: '192.168.20.6', bulbName: 'ESP25_SHRGB_01', mac: 'cc40855ddf56', moduleName: 'ESP25_SHRGB_01' },
+        { bulbIp: '192.168.20.7', bulbName: 'ESP01_SHRGB1C_31', mac: 'd8a0118e4112', moduleName: 'ESP01_SHRGB1C_31' }
       ],
       activeBulbIp: '192.168.20.6',
       customColors: [],
@@ -172,13 +176,15 @@ class BulbManager {
       }
     }
 
-    // Update names from connected bulbs
+    // Update names, mac, and moduleName from connected bulbs
     for (const [ip, state] of this.bulbStates) {
       if (ip && state) {
         const existing = bulbMap.get(ip)
         bulbMap.set(ip, {
           bulbIp: ip,
-          bulbName: state.name || existing?.bulbName || 'WiZ Bulb'
+          bulbName: state.name || existing?.bulbName || 'WiZ Bulb',
+          mac: state.mac || existing?.mac || '',
+          moduleName: state.moduleName || existing?.moduleName || 'WiZ Bulb'
         })
       }
     }
@@ -250,24 +256,21 @@ class BulbManager {
       }
     }
 
-    // Phase 2: Broadcast discovery (ONLY if no saved bulbs exist at all)
-    if (savedIps.length === 0 && this.bulbs.size === 0) {
-      log.info('Phase 2: Trying general broadcast discovery for new setup')
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const res = await discover({ waitMs: 2500 })
-          for (const bulb of res) {
-            const ip = bulb.address
-            if (!this.bulbs.has(ip)) {
-              await this.connectBulb(bulb, ip)
-            }
-          }
-        } catch (error) {
-          log.error('Error during broadcast discovery:', error)
-        }
+    // Phase 2: Network Broadcast & Subnet Sweep if ANY saved bulb is missing or new setup
+    const missingBulbs = savedIps.filter((ip) => {
+      const state = this.bulbStates.get(ip)
+      return !state || state.connectionStatus !== 'connected'
+    })
 
-        if (this.bulbs.size > 0) break
-        await this.delay(DISCOVERY_RETRY_DELAY_MS)
+    if (missingBulbs.length > 0 || (savedIps.length === 0 && this.bulbs.size === 0)) {
+      log.info(`Phase 2: ${missingBulbs.length} bulb(s) missing after unicast probe. Running broadcast/subnet discovery...`)
+      try {
+        const sweepResults = await this.sweepNetworkForBulbs()
+        for (const bulb of sweepResults) {
+          await this.handleDiscoveredBulb(bulb)
+        }
+      } catch (err) {
+        log.warn('Phase 2 broadcast/subnet discovery error:', err)
       }
     }
 
@@ -310,34 +313,199 @@ class BulbManager {
     this.sendStateToRenderer()
   }
 
-  // --- Background Auto-Reconnect Daemon ---
+  // --- Background Auto-Reconnect Daemon & Network Probing ---
 
+  /**
+   * Discovers all WiZ bulbs across the local network by combining broadcast
+   * and proactive subnet scanning around known IPs to mitigate router broadcast filtering.
+   */
+  public async sweepNetworkForBulbs(): Promise<Bulb[]> {
+    const extraTargets: string[] = []
+    const prefixes = new Set<string>()
+
+    for (const b of this.appData.bulbs) {
+      const parts = b.bulbIp.split('.')
+      if (parts.length === 4) {
+        prefixes.add(`${parts[0]}.${parts[1]}.${parts[2]}.`)
+      }
+    }
+    if (prefixes.size === 0) {
+      prefixes.add('192.168.20.')
+    }
+
+    for (const prefix of prefixes) {
+      // Proactively probe common DHCP lease IPs
+      for (let i = 2; i <= 35; i++) {
+        extraTargets.push(`${prefix}${i}`)
+      }
+    }
+
+    try {
+      return await discover({ waitMs: 2200, extraTargets })
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Resolves a discovered bulb against saved bulbs using hardware MAC address
+   * to automatically handle dynamic DHCP IP reassignments.
+   */
+  public async handleDiscoveredBulb(bulb: Bulb) {
+    const discoveredIp = bulb.address
+    let mac = bulb.macIdentifier || ''
+
+    if (!mac) {
+      try {
+        const pilot = await bulb.getPilot()
+        if (pilot?.result?.mac) {
+          mac = pilot.result.mac
+        }
+      } catch {}
+    }
+
+    // 1. Check if this bulb matches an existing saved bulb by MAC address
+    const matchingSavedByMac = mac
+      ? this.appData.bulbs.find(
+          (b) => b.mac && b.mac.toLowerCase() === mac.toLowerCase()
+        )
+      : null
+
+    if (matchingSavedByMac) {
+      if (matchingSavedByMac.bulbIp !== discoveredIp) {
+        const oldIp = matchingSavedByMac.bulbIp
+        log.info(
+          `[Auto-Reconnect] DHCP IP MIGRATION DETECTED! Bulb "${matchingSavedByMac.bulbName}" (MAC ${mac}) moved from ${oldIp} -> ${discoveredIp}`
+        )
+        this.bulbs.delete(oldIp)
+        this.bulbStates.delete(oldIp)
+
+        matchingSavedByMac.bulbIp = discoveredIp
+        if (this.activeBulbIp === oldIp) {
+          this.activeBulbIp = discoveredIp
+        }
+      }
+
+      await this.connectBulb(bulb, discoveredIp)
+      this.saveConfig()
+      this.sendStateToRenderer()
+      return
+    }
+
+    // 2. Check if this bulb matches by IP
+    const matchingSavedByIp = this.appData.bulbs.find((b) => b.bulbIp === discoveredIp)
+    if (matchingSavedByIp) {
+      const existingState = this.bulbStates.get(discoveredIp)
+      if (!existingState || existingState.connectionStatus !== 'connected') {
+        await this.connectBulb(bulb, discoveredIp)
+        this.saveConfig()
+        this.sendStateToRenderer()
+      }
+    }
+  }
+
+  /**
+   * Background health monitor for connected bulbs. Detects power switch off or Wi-Fi drops.
+   */
+  private async performHealthCheck() {
+    for (const [ip, bulb] of this.bulbs) {
+      const state = this.bulbStates.get(ip)
+      if (!state || state.connectionStatus !== 'connected') continue
+
+      try {
+        const pilot = await bulb.getPilot()
+        if (pilot && pilot.result) {
+          state.state = pilot.result.state ?? state.state
+          state.dimming = pilot.result.dimming ?? state.dimming
+          state.rssi = pilot.result.rssi ?? state.rssi
+        }
+      } catch {
+        // Missed pilot check; verify with quick unicast probe before declaring offline
+        try {
+          const res = await discover({ addr: ip, waitMs: 1200 })
+          if (res.length === 0) {
+            log.warn(`Bulb at ${ip} stopped responding. Transitioning to offline for auto-reconnect.`)
+            state.connectionStatus = 'offline'
+            this.sendStateToRenderer()
+          }
+        } catch {
+          state.connectionStatus = 'offline'
+          this.sendStateToRenderer()
+        }
+      }
+    }
+  }
+
+  /**
+   * Continuous self-healing auto-reconnection daemon.
+   * Uses non-overlapping recursive setTimeout to guarantee safe socket execution on Windows.
+   */
   private startAutoReconnectDaemon() {
     if (this.reconnectTimer) return
 
-    this.reconnectTimer = setInterval(async () => {
-      const savedIps = this.appData.bulbs.map((b) => b.bulbIp)
-      const disconnectedIps = savedIps.filter((ip) => {
-        const state = this.bulbStates.get(ip)
-        return !state || state.connectionStatus !== 'connected'
-      })
+    let cycleCount = 0
 
-      if (disconnectedIps.length === 0) return
-
-      await Promise.allSettled(
-        disconnectedIps.map(async (ip) => {
-          try {
-            const res = await discover({ addr: ip, waitMs: 1500 })
-            if (res.length > 0) {
-              await this.connectBulb(res[0], ip)
-              log.info('Auto-reconnected bulb at', ip, '- Name:', this.bulbStates.get(ip)?.name)
-              this.saveConfig()
-              this.sendStateToRenderer()
-            }
-          } catch {}
+    const runReconnectionCycle = async () => {
+      try {
+        const savedEntries = this.appData.bulbs
+        const disconnectedBulbs = savedEntries.filter((entry) => {
+          const state = this.bulbStates.get(entry.bulbIp)
+          return !state || state.connectionStatus !== 'connected'
         })
-      )
-    }, 4000)
+
+        if (disconnectedBulbs.length > 0) {
+          cycleCount++
+
+          // Step 1: Unicast multi-burst probe to known IPs
+          await Promise.allSettled(
+            disconnectedBulbs.map(async (entry) => {
+              try {
+                const res = await discover({ addr: entry.bulbIp, waitMs: 1600 })
+                if (res.length > 0) {
+                  await this.connectBulb(res[0], entry.bulbIp)
+                  log.info(`[Auto-Reconnect] Reconnected bulb at ${entry.bulbIp} (${entry.bulbName})`)
+                  this.saveConfig()
+                  this.sendStateToRenderer()
+                }
+              } catch (err) {
+                log.warn(`[Auto-Reconnect] Unicast probe error for ${entry.bulbIp}:`, err)
+              }
+            })
+          )
+
+          // Step 2: Check if any bulbs are STILL disconnected
+          const stillDisconnected = savedEntries.filter((entry) => {
+            const state = this.bulbStates.get(entry.bulbIp)
+            return !state || state.connectionStatus !== 'connected'
+          })
+
+          // Step 3: Every 3rd cycle (~10s) or on initial cycle, perform full broadcast + subnet sweep
+          if (stillDisconnected.length > 0 && (cycleCount % 3 === 0 || cycleCount === 1)) {
+            try {
+              const discoveredBulbs = await this.sweepNetworkForBulbs()
+              for (const discovered of discoveredBulbs) {
+                await this.handleDiscoveredBulb(discovered)
+              }
+            } catch (err) {
+              log.warn('[Auto-Reconnect] Network sweep error:', err)
+            }
+          }
+        } else {
+          // All bulbs are connected: run gentle heartbeat health check every ~10s
+          cycleCount++
+          if (cycleCount % 3 === 0) {
+            await this.performHealthCheck()
+          }
+        }
+      } catch (e) {
+        log.error('[Auto-Reconnect] Cycle error:', e)
+      } finally {
+        // Continuous, self-scheduling 3.5s delay
+        this.reconnectTimer = setTimeout(runReconnectionCycle, 3500)
+      }
+    }
+
+    this.reconnectTimer = setTimeout(runReconnectionCycle, 1500)
   }
 
   private async connectBulb(bulb: Bulb, ip: string) {
@@ -404,6 +572,10 @@ class BulbManager {
     }
 
     const savedEntry = this.appData.bulbs.find((b) => b.bulbIp === ip)
+    if (savedEntry) {
+      if (configResult.mac) savedEntry.mac = configResult.mac
+      if (configResult.moduleName) savedEntry.moduleName = configResult.moduleName
+    }
     const name = savedEntry?.bulbName || configResult.moduleName || 'WiZ Bulb'
 
     return {
@@ -554,14 +726,32 @@ class BulbManager {
     }
 
     try {
-      const res = await discover({ addr: ip, waitMs: 2200 })
+      log.info(`[Manual Reconnect] Probing bulb at ${ip}...`)
+      // 1. Direct unicast probe
+      const res = await discover({ addr: ip, waitMs: 2000 })
       if (res.length > 0) {
         await this.connectBulb(res[0], ip)
         this.saveConfig()
-      } else {
-        if (state) {
-          state.connectionStatus = 'offline'
-        }
+        this.sendStateToRenderer()
+        return
+      }
+
+      // 2. Unicast didn't respond: immediately sweep subnet to detect if DHCP IP changed!
+      log.info(`[Manual Reconnect] ${ip} did not respond directly. Sweeping subnet to check IP migration...`)
+      const sweep = await this.sweepNetworkForBulbs()
+      for (const bulb of sweep) {
+        await this.handleDiscoveredBulb(bulb)
+      }
+
+      const updatedState = this.bulbStates.get(ip)
+      if (updatedState && updatedState.connectionStatus === 'connected') {
+        log.info(`[Manual Reconnect] Successfully reconnected via network sweep!`)
+        return
+      }
+
+      // If still offline, update status (auto-reconnector will keep trying continuously)
+      if (state) {
+        state.connectionStatus = 'offline'
       }
     } catch (error) {
       log.error('Failed to reconnect to bulb at', ip, ':', error)
@@ -895,7 +1085,7 @@ class BulbManager {
 
   public endConnection() {
     if (this.reconnectTimer) {
-      clearInterval(this.reconnectTimer)
+      clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
     this.saveConfig()

@@ -4,6 +4,8 @@ import { CustomColor } from '@shared/types/customColor'
 export interface BulbConfigEntry {
   bulbIp: string
   bulbName: string
+  mac?: string
+  moduleName?: string
 }
 
 export interface AppConfig {

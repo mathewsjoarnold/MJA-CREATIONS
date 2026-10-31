@@ -12,10 +12,12 @@ export async function discover({
 	addr,
 	port = WIZ_BULB_LISTEN_PORT,
 	waitMs = DEFAULT_DISCOVER_WAIT_MS,
+	extraTargets = [],
 }: {
 	addr?: string;
 	port?: number;
 	waitMs?: number;
+	extraTargets?: string[];
 } = {}): Promise<Bulb[]> {
 	const client = dgram.createSocket("udp4");
 	const bulbs: Bulb[] = [];
@@ -24,10 +26,22 @@ export async function discover({
 		params: {},
 	};
 
-	const targets = addr ? [addr] : getBroadcastAddresses();
+	const targets: string[] = [];
+	if (addr) {
+		targets.push(addr);
+	} else {
+		for (const bc of getBroadcastAddresses()) {
+			if (!targets.includes(bc)) targets.push(bc);
+		}
+		if (!targets.includes("255.255.255.255")) {
+			targets.push("255.255.255.255");
+		}
+	}
 
-	if (targets.length === 0 && !addr) {
-		targets.push("255.255.255.255");
+	if (extraTargets && extraTargets.length > 0) {
+		for (const et of extraTargets) {
+			if (!targets.includes(et)) targets.push(et);
+		}
 	}
 
 	return new Promise<Bulb[]>((resolve) => {
@@ -63,7 +77,8 @@ export async function discover({
 				const response = JSON.parse(msg.toString());
 				if (checkType(getPilotResponseTemplate, response)) {
 					if (!bulbs.some((b) => b.address === rinfo.address)) {
-						bulbs.push(new Bulb(rinfo.address, { port }));
+						const mac = response?.result?.mac || undefined;
+						bulbs.push(new Bulb(rinfo.address, { port, macIdentifier: mac }));
 						// When probing a specific IP, resolve early as soon as it responds
 						if (addr && rinfo.address === addr) {
 							cleanup();
@@ -72,6 +87,10 @@ export async function discover({
 				}
 			} catch {}
 		};
+
+		client.on("error", () => {
+			cleanup();
+		});
 
 		client.on("message", listener);
 

@@ -1,7 +1,7 @@
 import { useBulbStore } from '@renderer/context/BulbStore'
 import { BulbState } from '@shared/types/bulbState'
 import { useTranslation } from 'react-i18next'
-import { LuCircleCheck, LuCpu, LuLoaderCircle, LuWifiOff } from 'react-icons/lu'
+import { LuCircleCheck, LuCpu, LuLoaderCircle } from 'react-icons/lu'
 
 export default function Information() {
   const bulbs = useBulbStore((state) => state.bulbs)
@@ -61,9 +61,9 @@ export default function Information() {
               </span>
             )}
             {isOffline && (
-              <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">
-                <LuWifiOff size={13} />
-                <span>Offline</span>
+              <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                <LuLoaderCircle size={13} className="animate-spin text-amber-400" />
+                <span>Auto-Reconnecting</span>
               </span>
             )}
           </div>

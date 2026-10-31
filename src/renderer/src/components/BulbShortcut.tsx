@@ -67,8 +67,8 @@ export default function BulbShortcut() {
               </span>
             )}
             {isOffline && (
-              <span className="flex items-center gap-1 text-rose-400 font-medium text-[11px]">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-rose-400" /> Offline
+              <span className="flex items-center gap-1 text-amber-400 font-medium text-[11px]">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" /> Auto-reconnecting...
               </span>
             )}
             {isConnected && (
@@ -87,9 +87,9 @@ export default function BulbShortcut() {
             type="button"
             onClick={() => reconnectBulb(activeBulb.ip)}
             className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
-            title="Reconnect"
+            title="Retry connecting now"
           >
-            <LuRefreshCw size={13} className="text-neutral-300" />
+            <LuRefreshCw size={13} className="text-amber-400" />
           </button>
         ) : (
           <PowerButton isOn={activeBulb.state} onToggle={toggleBulb} />
