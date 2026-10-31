@@ -293,12 +293,16 @@ class BulbManager {
       })
     }
 
-    // Assign active bulb
-    if (this.bulbs.size > 0 && !this.activeBulbIp) {
-      if (this.appData.activeBulbIp && this.bulbStates.has(this.appData.activeBulbIp)) {
-        this.activeBulbIp = this.appData.activeBulbIp
-      } else {
-        this.activeBulbIp = this.bulbStates.keys().next().value ?? null
+    // Assign active bulb: prefer connected bulbs over offline bulbs!
+    const activeState = this.activeBulbIp ? this.bulbStates.get(this.activeBulbIp) : null
+    if (!activeState || activeState.connectionStatus !== 'connected') {
+      const firstConnected = Array.from(this.bulbStates.values()).find(
+        (s) => s.connectionStatus === 'connected'
+      )
+      if (firstConnected) {
+        this.activeBulbIp = firstConnected.ip
+      } else if (!this.activeBulbIp) {
+        this.activeBulbIp = this.appData.activeBulbIp || this.bulbStates.keys().next().value || null
       }
     }
 
@@ -342,7 +346,8 @@ class BulbManager {
       this.bulbs.set(ip, bulb)
       this.bulbStates.set(ip, state)
 
-      if (!this.activeBulbIp) {
+      const active = this.activeBulbIp ? this.bulbStates.get(this.activeBulbIp) : null
+      if (!this.activeBulbIp || !active || active.connectionStatus !== 'connected') {
         this.activeBulbIp = ip
       }
 
@@ -354,8 +359,24 @@ class BulbManager {
   }
 
   private async setUpSingleBulb(bulb: Bulb, ip: string): Promise<BulbState> {
-    const pilotResponse = await bulb.getPilot()
-    const pilot = pilotResponse.result
+    let pilot: any = {
+      state: true,
+      sceneId: 0,
+      dimming: 100
+    }
+
+    try {
+      const pilotResponse = await bulb.getPilot()
+      if (pilotResponse && pilotResponse.result) {
+        pilot = pilotResponse.result
+      }
+    } catch (e) {
+      log.warn(`Could not fetch live pilot for ${ip}, using default/cached state:`, e)
+      const existing = this.bulbStates.get(ip)
+      if (existing) {
+        pilot = { ...existing }
+      }
+    }
 
     let configResult = {
       mac: '',
