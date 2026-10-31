@@ -26,6 +26,7 @@ export interface IElectronAPI {
   toggleBulbByIp: (ip: string) => void
   addBulbByIp: (ip: string) => void
   deleteBulb: (ip: string) => void
+  reconnectBulb: (ip: string) => void
   retryDiscovery: () => void
   deleteProfile: () => void
 

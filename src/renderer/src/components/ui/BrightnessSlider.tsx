@@ -8,12 +8,12 @@ export default function BrightnessSlider() {
   const setBrightness = useBulbStore((state) => state.setBrightness)
 
   const [isDragging, setIsDragging] = useState(false)
-  const [currentBrightness, setCurrentBrightness] = useState(bulb?.dimming ?? 50)
+  const [currentBrightness, setCurrentBrightness] = useState(bulb?.dimming ?? 100)
 
   // Sync brightness when active bulb changes
   useEffect(() => {
     if (bulb) {
-      setCurrentBrightness(bulb.dimming)
+      setCurrentBrightness(bulb.dimming ?? 100)
     }
   }, [bulb?.ip, bulb?.dimming])
 

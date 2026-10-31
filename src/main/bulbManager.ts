@@ -92,8 +92,12 @@ class BulbManager {
           groupId: 0,
           ping: 0,
           customColors: this.appData.customColors,
-          favoriteColors: this.appData.favoriteColors
+          favoriteColors: this.appData.favoriteColors,
+          connectionStatus: 'connecting'
         })
+      }
+      if (!this.bulbs.has(entry.bulbIp)) {
+        this.bulbs.set(entry.bulbIp, new Bulb(entry.bulbIp, { port: 38899 }))
       }
     }
 
@@ -223,7 +227,10 @@ class BulbManager {
       log.info('Phase 1: Probing saved bulb IPs in parallel:', savedIps)
 
       for (let attempt = 0; attempt < MAX_DISCOVERY_RETRIES; attempt++) {
-        const pendingIps = savedIps.filter((ip) => !this.bulbs.has(ip))
+        const pendingIps = savedIps.filter((ip) => {
+          const state = this.bulbStates.get(ip)
+          return !state || state.connectionStatus !== 'connected'
+        })
         if (pendingIps.length === 0) break // All bulbs connected!
 
         await Promise.allSettled(
@@ -273,6 +280,13 @@ class BulbManager {
 
     this.isDiscovering = false
 
+    // Transition any bulb that did not respond to offline
+    for (const state of this.bulbStates.values()) {
+      if (state.connectionStatus !== 'connected') {
+        state.connectionStatus = 'offline'
+      }
+    }
+
     // Only flag discoveryFailed if user has NO saved bulbs and NONE were found
     if (this.bulbs.size === 0 && savedIps.length === 0) {
       this.discoveryFailed = true
@@ -306,7 +320,10 @@ class BulbManager {
 
     this.reconnectTimer = setInterval(async () => {
       const savedIps = this.appData.bulbs.map((b) => b.bulbIp)
-      const disconnectedIps = savedIps.filter((ip) => !this.bulbs.has(ip))
+      const disconnectedIps = savedIps.filter((ip) => {
+        const state = this.bulbStates.get(ip)
+        return !state || state.connectionStatus !== 'connected'
+      })
 
       if (disconnectedIps.length === 0) return
 
@@ -382,7 +399,8 @@ class BulbManager {
       port: bulb.bulbPort,
       name: name,
       customColors: this.appData.customColors,
-      favoriteColors: this.appData.favoriteColors
+      favoriteColors: this.appData.favoriteColors,
+      connectionStatus: 'connected'
     }
   }
 
@@ -431,12 +449,22 @@ class BulbManager {
 
   @needsViewUpdate('toggle bulb by IP')
   public async toggleBulbByIp(ip: string) {
-    const bulb = this.bulbs.get(ip)
+    let bulb = this.bulbs.get(ip)
     const state = this.bulbStates.get(ip)
-    if (!bulb || !state) return
+    if (!state) return
 
-    await bulb.toggle()
-    state.state = !state.state
+    if (!bulb) {
+      bulb = new Bulb(ip, { port: state.port || 38899 })
+      this.bulbs.set(ip, bulb)
+    }
+
+    try {
+      await bulb.toggle()
+      state.state = !state.state
+      state.connectionStatus = 'connected'
+    } catch (e) {
+      log.warn(`Failed to toggle bulb at ${ip}:`, e)
+    }
   }
 
   public async addBulbByIp(ip: string) {
@@ -489,47 +517,81 @@ class BulbManager {
   }
 
   public async retryDiscovery() {
-    this.bulbs.clear()
-    this.bulbStates.clear()
-    this.activeBulbIp = null
     this.discoveryFailed = false
     this.initKnownBulbs()
+    for (const state of this.bulbStates.values()) {
+      state.connectionStatus = 'connecting'
+    }
+    this.sendStateToRenderer()
     await this.discoverBulbs()
   }
 
   public async reconnectBulb(ip: string) {
-    this.bulbs.delete(ip)
-    this.sendStateToRenderer()
+    const state = this.bulbStates.get(ip)
+    if (state) {
+      state.connectionStatus = 'connecting'
+      this.sendStateToRenderer()
+    }
 
     try {
-      const res = await discover({ addr: ip, waitMs: 2000 })
+      const res = await discover({ addr: ip, waitMs: 2200 })
       if (res.length > 0) {
         await this.connectBulb(res[0], ip)
         this.saveConfig()
+      } else {
+        if (state) {
+          state.connectionStatus = 'offline'
+        }
       }
     } catch (error) {
       log.error('Failed to reconnect to bulb at', ip, ':', error)
+      if (state) {
+        state.connectionStatus = 'offline'
+      }
     }
+    this.sendStateToRenderer()
   }
 
   @needsViewUpdate('toggle active bulb')
   public async toggleBulb() {
-    const bulb = this.getActiveBulbInstance()
+    if (!this.activeBulbIp) return
+    let bulb = this.getActiveBulbInstance()
     const state = this.getActiveBulb()
-    if (!bulb || !state) return
+    if (!state) return
 
-    await bulb.toggle()
-    state.state = !state.state
+    if (!bulb) {
+      bulb = new Bulb(this.activeBulbIp, { port: state.port || 38899 })
+      this.bulbs.set(this.activeBulbIp, bulb)
+    }
+
+    try {
+      await bulb.toggle()
+      state.state = !state.state
+      state.connectionStatus = 'connected'
+    } catch (e) {
+      log.warn(`Failed to toggle active bulb at ${this.activeBulbIp}:`, e)
+    }
   }
 
   @needsViewUpdate('set brightness')
   public async setBrightness(dimming: number) {
-    const bulb = this.getActiveBulbInstance()
+    if (!this.activeBulbIp) return
+    let bulb = this.getActiveBulbInstance()
     const state = this.getActiveBulb()
-    if (!bulb || !state) return
+    if (!state) return
 
-    await bulb.brightness(dimming)
-    state.dimming = dimming
+    if (!bulb) {
+      bulb = new Bulb(this.activeBulbIp, { port: state.port || 38899 })
+      this.bulbs.set(this.activeBulbIp, bulb)
+    }
+
+    try {
+      await bulb.brightness(dimming)
+      state.dimming = dimming
+      state.connectionStatus = 'connected'
+    } catch (e) {
+      log.warn(`Failed to set brightness at ${this.activeBulbIp}:`, e)
+    }
   }
 
   @needsViewUpdate('set bulb name')
@@ -550,13 +612,24 @@ class BulbManager {
 
   @needsViewUpdate('set scene')
   public async setScene(sceneId: number) {
-    const bulb = this.getActiveBulbInstance()
+    if (!this.activeBulbIp) return
+    let bulb = this.getActiveBulbInstance()
     const state = this.getActiveBulb()
-    if (!bulb || !state) return
+    if (!state) return
 
-    await bulb.scene(sceneId)
-    state.state = true
-    state.sceneId = sceneId
+    if (!bulb) {
+      bulb = new Bulb(this.activeBulbIp, { port: state.port || 38899 })
+      this.bulbs.set(this.activeBulbIp, bulb)
+    }
+
+    try {
+      await bulb.scene(sceneId)
+      state.state = true
+      state.sceneId = sceneId
+      state.connectionStatus = 'connected'
+    } catch (e) {
+      log.warn('Failed to set scene at ' + this.activeBulbIp + ':', e)
+    }
   }
 
   public async setCustomColor(colorId: number) {

@@ -1,5 +1,7 @@
 import { CustomColor } from './customColor'
 
+export type BulbConnectionStatus = 'connected' | 'connecting' | 'offline'
+
 export interface BulbState {
   mac: string
   rssi: number
@@ -26,4 +28,5 @@ export interface BulbState {
   name: string
   customColors: CustomColor[]
   favoriteColors: Array<number>
+  connectionStatus?: BulbConnectionStatus
 }

@@ -12,7 +12,7 @@ import { useTranslation } from 'react-i18next'
 import { LuCirclePlus, LuSquarePen, LuToggleLeft, LuTrash } from 'react-icons/lu'
 
 export default function Home() {
-  const { bulbs, activeBulb, isDiscovering, toggleBulbByIp, setActiveBulb, deleteBulb, isReady } =
+  const { bulbs, activeBulb, isDiscovering, toggleBulbByIp, setActiveBulb, deleteBulb, reconnectBulb, isReady } =
     useBulbStore()
   const { t } = useTranslation()
   const [modals, setModals] = useState<HomeModalState>({
@@ -97,6 +97,7 @@ export default function Home() {
             isActive={b.ip === activeBulb?.ip}
             onSelect={() => setActiveBulb(b.ip)}
             onToggle={() => toggleBulbByIp(b.ip)}
+            onReconnect={() => reconnectBulb(b.ip)}
             menuItems={getMenuItemsForBulb(b.ip)}
           />
         ))}

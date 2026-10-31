@@ -39,6 +39,7 @@ interface BulbStore {
   toggleBulbByIp: (ip: string) => void
   addBulbByIp: (ip: string) => void
   deleteBulb: (ip: string) => void
+  reconnectBulb: (ip: string) => Promise<void>
   retryDiscovery: () => void
 }
 
@@ -145,6 +146,15 @@ export const useBulbStore = create<BulbStore>((set) => ({
   deleteBulb: (ip: string) => {
     log.debug('[RENDERER] Deleting bulb:', ip)
     window.api.deleteBulb(ip)
+  },
+  reconnectBulb: async (ip: string) => {
+    log.debug('[RENDERER] Reconnecting bulb by IP:', ip)
+    set((state) => ({
+      bulbs: state.bulbs.map((b) => (b.ip === ip ? { ...b, connectionStatus: 'connecting' } : b)),
+      activeBulb:
+        state.activeBulb?.ip === ip ? { ...state.activeBulb, connectionStatus: 'connecting' } : state.activeBulb
+    }))
+    window.api.reconnectBulb(ip)
   },
   retryDiscovery: () => {
     log.debug('[RENDERER] Retrying discovery')

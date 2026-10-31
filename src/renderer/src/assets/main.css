@@ -69,6 +69,37 @@
   }
 }
 
+
+
+/* Connecting card loading and shimmer animations */
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer-sweep {
+  animation: shimmer-sweep 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes beacon-glow {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.animate-beacon {
+  animation: beacon-glow 1.5s ease-in-out infinite;
+}
+
 .animate-pulse-ring {
   animation: pulse-ring 2s ease-in-out infinite;
 }

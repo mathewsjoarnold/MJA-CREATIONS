@@ -25,7 +25,7 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
     await BulbManager.addCustomColor(colorName, colorHex)
   })
 
-    ipcMain.on('sync-bulb-color', (_, data: { r: number; g: number; b: number; dimming?: number; ip?: string }) => {
+  ipcMain.on('sync-bulb-color', (_, data: { r: number; g: number; b: number; dimming?: number; ip?: string }) => {
     BulbManager.syncBulbColor(data.r, data.g, data.b, data.dimming, data.ip)
   })
 
@@ -64,6 +64,10 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
 
   ipcMain.on('delete-bulb', (_, ip) => {
     BulbManager.deleteBulb(ip)
+  })
+
+  ipcMain.on('reconnect-bulb', async (_, ip: string) => {
+    await BulbManager.reconnectBulb(ip)
   })
 
   ipcMain.on('retry-discovery', async () => {

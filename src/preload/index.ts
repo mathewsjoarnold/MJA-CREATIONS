@@ -34,6 +34,7 @@ const api = {
   toggleBulbByIp: (ip: string) => ipcRenderer.send('toggle-bulb-by-ip', ip),
   addBulbByIp: (ip: string) => ipcRenderer.send('add-bulb-by-ip', ip),
   deleteBulb: (ip: string) => ipcRenderer.send('delete-bulb', ip),
+  reconnectBulb: (ip: string) => ipcRenderer.send('reconnect-bulb', ip),
   retryDiscovery: () => ipcRenderer.send('retry-discovery'),
   deleteProfile: () => ipcRenderer.send('delete-profile'),
 
