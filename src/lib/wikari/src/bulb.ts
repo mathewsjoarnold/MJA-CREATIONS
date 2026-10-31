@@ -368,7 +368,7 @@ export class Bulb {
 	//   Lower-level interaction functions
 	// ######################################
 	private isReadyToSend(
-		waitForResponse: boolean,
+		_waitForResponse: boolean,
 	): WikariError<WikariErrorCode.InvalidBulbState> | undefined {
 		const getError = (msg: string) => {
 			return new WikariError(
@@ -381,40 +381,34 @@ export class Bulb {
 			);
 		};
 
-		if (Bulb.state != WikariState.READY) {
-			if (Bulb.state == WikariState.BINDING)
-				return getError("Still waiting for port binding to finish");
+		if (Bulb.state == WikariState.BINDING)
+			return getError("Still waiting for port binding to finish");
 
-			if (Bulb.state == WikariState.CLOSED)
-				return getError("This bulb instance has been closed");
-
-			if (Bulb.state == WikariState.AWAITING_RESPONSE && waitForResponse)
-				return getError("Already waiting on a response");
-		}
+		if (Bulb.state == WikariState.CLOSED)
+			return getError("This bulb instance has been closed");
 
 		return undefined;
 	}
 
 	private sendWithWait(message: Message): Promise<GenericResponse> {
-		Bulb.setInstanceState(WikariState.AWAITING_RESPONSE);
-
 		return new Promise((resolve, reject) => {
 			let timer: ReturnType<typeof setTimeout>;
 
+			const cleanup = () => {
+				if (timer) clearTimeout(timer);
+				Bulb.client.off("message", messageListener);
+			};
+
 			const messageListener = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
-				// if the message is not from the bulb IP, ignore it
 				if (rinfo.address != this.address) return;
 
 				try {
 					const response = JSON.parse(msg.toString());
-
 					if ("method" in response) {
-						// not the response to the request we sent
 						if (response["method"] != message["method"]) return;
 					}
 
-					if (timer) clearTimeout(timer);
-					Bulb.client.off("message", messageListener);
+					cleanup();
 
 					if ("error" in response) {
 						reject(
@@ -424,10 +418,11 @@ export class Bulb {
 								"Bulb returned failure",
 							),
 						);
-					} else resolve(response);
-
-					Bulb.setInstanceState(WikariState.READY);
+					} else {
+						resolve(response);
+					}
 				} catch (error) {
+					cleanup();
 					reject(
 						new WikariError(
 							WikariErrorCode.ResponseParseFailed,
@@ -445,8 +440,7 @@ export class Bulb {
 				this.address,
 				error => {
 					if (error) {
-						if (timer) clearTimeout(timer);
-						Bulb.setInstanceState(WikariState.READY);
+						cleanup();
 						reject(
 							new WikariError(
 								WikariErrorCode.RequestSendError,
@@ -458,13 +452,11 @@ export class Bulb {
 				},
 			);
 
-			// if the request takes longer than the timeout wait,
-			// we can assume the packet has been lost
 			const getResponseTimeout = () =>
 				this.responseTimeout ?? DEFAULT_RESPONSE_WAIT_MS;
 
 			timer = setTimeout(() => {
-				Bulb.client.off("message", messageListener);
+				cleanup();
 				reject(
 					new WikariError(
 						WikariErrorCode.RequestTimedOut,

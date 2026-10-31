@@ -19,7 +19,13 @@ export default function FavoriteScene() {
   const bulb = useBulbStore((state) => state.activeBulb)
   const { t } = useTranslation()
   const setFavoriteColorsOrder = useBulbStore((state) => state.setFavoriteColorsOrder)
-  const sensors = useSensors(useSensor(PointerSensor))
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8
+      }
+    })
+  )
 
   const favorites = useMemo(() => {
     if (!bulb) return []
