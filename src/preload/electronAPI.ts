@@ -10,12 +10,12 @@ export interface IElectronAPI {
 
   // Active bulb operations
   syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string }) => void
-  toggleBulb: () => void
-  setBrightness: (brightness: number) => void
+  toggleBulb: (targetIp?: string) => void
+  setBrightness: (brightness: number, targetIp?: string) => void
   setBulbName: (name: string, ip?: string) => void
-  setScene: (sceneId: number) => void
+  setScene: (sceneId: number, targetIp?: string) => void
   addCustomColor: (colorName: string, colorHex: string) => void
-  setCustomColor: (colorId: number) => void
+  setCustomColor: (colorId: number, targetIp?: string) => void
   editCustomColor: (colorId: number, colorName: string, colorHex: string) => void
   removeCustomColor: (colorId: number) => void
   toggleFavoriteColor: (colorId: number) => void

@@ -9,13 +9,15 @@ type SceneItemProps = {
 
 export default function SceneItem({ id, name, icon }: SceneItemProps) {
   const bulb = useBulbStore((state) => state.activeBulb)
+  const isAllSelected = useBulbStore((state) => state.isAllSelected)
+  const bulbs = useBulbStore((state) => state.bulbs)
   const setScene = useBulbStore((state) => state.setScene)
   const toggleFavoriteColor = useBulbStore((state) => state.toggleFavoriteColor)
 
-  const active = bulb ? bulb.sceneId === id : false
+  const active = isAllSelected ? bulbs.some((b) => b.sceneId === id) : bulb ? bulb.sceneId === id : false
 
   const handleClick = () => {
-    if (!bulb) return
+    if (!bulb && !isAllSelected) return
     setScene(id)
   }
 
@@ -29,7 +31,7 @@ export default function SceneItem({ id, name, icon }: SceneItemProps) {
 
   return (
     <div
-      className={`flex items-center justify-between cursor-pointer ${active ? 'bg-primary hover:bg-primary-600' : 'bg-secondary hover:bg-secondary-600'} text-white rounded-2xl px-4 py-6 2xl:px-6 text-nowrap transition-colors ${!bulb ? 'opacity-50 cursor-not-allowed' : ''}`}
+      className={`flex items-center justify-between cursor-pointer ${active ? 'bg-primary hover:bg-primary-600' : 'bg-secondary hover:bg-secondary-600'} text-white rounded-2xl px-4 py-6 2xl:px-6 text-nowrap transition-colors ${!bulb && !isAllSelected ? 'opacity-50 cursor-not-allowed' : ''}`}
       onClick={handleClick}
     >
       <div className="flex items-center">

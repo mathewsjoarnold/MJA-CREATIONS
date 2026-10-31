@@ -36,6 +36,9 @@ export default function MusicSync() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [targetBulb, setTargetBulb] = useState<string>('all')
+  const [screenSources, setScreenSources] = useState<{ id: string; name: string }[]>([])
+  const [selectedScreenId, setSelectedScreenId] = useState<string>('')
+  const [liveScreenColor, setLiveScreenColor] = useState<{ r: number; g: number; b: number } | null>(null)
 
   const [sensitivity, setSensitivity] = useState<number>(1.2)
   const [minBrightness, setMinBrightness] = useState<number>(15)
@@ -47,12 +50,18 @@ export default function MusicSync() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const vizDataRef = useRef<VisualizerState | null>(null)
 
-  // Load audio input devices
+  // Load audio input devices and screen sources
   useEffect(() => {
     MusicSyncEngine.getAudioInputDevices().then((devices) => {
       setAudioDevices(devices)
       if (devices.length > 0 && !selectedDeviceId) {
         setSelectedDeviceId(devices[0].deviceId)
+      }
+    })
+    MusicSyncEngine.getScreenSources().then((sources) => {
+      setScreenSources(sources)
+      if (sources.length > 0 && !selectedScreenId) {
+        setSelectedScreenId(sources[0].id)
       }
     })
   }, [])
@@ -69,7 +78,8 @@ export default function MusicSync() {
       beatSensitivity,
       targetIp: targetBulb,
       audioSourceType: audioSource,
-      deviceId: selectedDeviceId
+      deviceId: selectedDeviceId,
+      screenSourceId: selectedScreenId
     })
   }, [
     mode,
@@ -81,13 +91,20 @@ export default function MusicSync() {
     beatSensitivity,
     targetBulb,
     audioSource,
-    selectedDeviceId
+    selectedDeviceId,
+    selectedScreenId
   ])
 
   // Canvas visualizer loop with exact aspect-ratio and crisp high-DPI scaling
   useEffect(() => {
+    let lastUiColorTime = 0
     musicSyncEngine.setOnFrameCallback((state) => {
       vizDataRef.current = state
+      const now = performance.now()
+      if (state.screenColor && now - lastUiColorTime > 120) {
+        lastUiColorTime = now
+        setLiveScreenColor(state.screenColor)
+      }
     })
 
     let animationId: number
@@ -293,6 +310,12 @@ export default function MusicSync() {
       title: 'Ambient Glow',
       desc: 'Silky, relaxed breathing light with zero harsh strobing.',
       icon: <LuActivity size={22} className="text-emerald-400" />
+    },
+    {
+      id: 'screen',
+      title: 'Screen Ambilight',
+      desc: 'Syncs bulb color to dominant screen pixels, with audio-driven brightness.',
+      icon: <LuMonitor size={22} className="text-cyan-400" />
     }
   ]
 
@@ -459,10 +482,56 @@ export default function MusicSync() {
         </Card>
       </div>
 
+      {/* Screen Ambilight Source Card (shown when mode === 'screen') */}
+      {mode === 'screen' && (
+        <Card variant="secondary" padding="medium" className="flex flex-col gap-3 rounded-xl border border-cyan-500/30 bg-cyan-950/20 shadow-lg shadow-cyan-950/20">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-cyan-300 font-semibold text-sm">
+              <LuMonitor size={18} className="text-cyan-400" />
+              <span>Screen Ambilight + Audio Settings</span>
+            </div>
+            {liveScreenColor && (
+              <div className="flex items-center gap-2 text-xs text-neutral-200 bg-neutral-900/90 px-3 py-1 rounded-lg border border-cyan-500/30">
+                <span className="text-neutral-400">Live Screen Color:</span>
+                <span
+                  className="w-4 h-4 rounded-full border border-white/40 shadow-sm inline-block"
+                  style={{ backgroundColor: `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})` }}
+                />
+                <span className="font-mono text-[11px] text-cyan-300 font-bold">
+                  rgb({liveScreenColor.r}, {liveScreenColor.g}, {liveScreenColor.b})
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="flex-1">
+              <label className="text-xs text-neutral-400 mb-1 block font-medium">Display / Screen to Mirror</label>
+              <select
+                value={selectedScreenId}
+                onChange={(e) => setSelectedScreenId(e.target.value)}
+                className="w-full bg-neutral-900 border border-neutral-700 text-white text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
+              >
+                {screenSources.length === 0 && <option value="">Primary Display</option>}
+                {screenSources.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    🖥️ {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-neutral-400">
+            Continuously samples dominant pixel hues from the chosen screen to paint the bulb color, while your audio loopback/mic drives dynamic brightness dimming and beat pulses.
+          </p>
+        </Card>
+      )}
+
       {/* Sync Mode Selector (Uniform, Responsive Grid) */}
       <div className="flex flex-col gap-3">
         <h2 className="text-base font-semibold text-neutral-200">Synchronization Mode</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {modes.map((m) => {
             const isSelected = mode === m.id
             return (
@@ -497,7 +566,7 @@ export default function MusicSync() {
       </div>
 
       {/* Color Palette Selector (for Mood, Pulse, Cycle & Ambient) */}
-      {mode !== 'spectrum' && (
+      {mode !== 'spectrum' && mode !== 'screen' && (
         <div className="flex flex-col gap-3">
           <h2 className="text-base font-semibold text-neutral-200">Color Palette</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

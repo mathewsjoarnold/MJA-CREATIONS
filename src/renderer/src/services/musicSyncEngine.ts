@@ -1,4 +1,4 @@
-export type MusicSyncMode = 'spectrum' | 'mood' | 'pulse' | 'cycle' | 'ambient'
+export type MusicSyncMode = 'spectrum' | 'mood' | 'pulse' | 'cycle' | 'ambient' | 'screen'
 export type PaletteId = 'cyberpunk' | 'synthwave' | 'ocean' | 'fire' | 'neon' | 'aurora'
 export type AudioSourceType = 'loopback' | 'mic'
 
@@ -13,6 +13,7 @@ export interface SyncEngineConfig {
   targetIp: string // 'all' or bulb IP
   audioSourceType: AudioSourceType
   deviceId?: string
+  screenSourceId?: string
 }
 
 export interface VisualizerState {
@@ -27,6 +28,7 @@ export interface VisualizerState {
   currentB: number
   currentDimming: number
   frequencyData: Uint8Array
+  screenColor?: { r: number; g: number; b: number }
 }
 
 export interface PaletteInfo {
@@ -261,6 +263,14 @@ export class MusicSyncEngine {
   private currentHsv = { h: 280, s: 1, v: 0.5 }
   private currentDimming: number = 50
 
+  // Screen Ambilight state
+  private screenStream: MediaStream | null = null
+  private screenVideo: HTMLVideoElement | null = null
+  private screenCanvas: HTMLCanvasElement | null = null
+  private screenCtx: CanvasRenderingContext2D | null = null
+  private lastScreenRgb: { r: number; g: number; b: number } = { r: 55, g: 114, b: 255 }
+  private lastScreenHsv: { h: number; s: number; v: number } = { h: 220, s: 0.8, v: 0.9 }
+
   // WiZ packet throttling & deadband
   private lastSent = { r: -1, g: -1, b: -1, dimming: -1 }
 
@@ -274,7 +284,20 @@ export class MusicSyncEngine {
   }
 
   public updateConfig(newConfig: Partial<SyncEngineConfig>) {
+    const prevMode = this.config.mode
+    const prevScreenId = this.config.screenSourceId
     this.config = { ...this.config, ...newConfig }
+
+    if (this.isRunning) {
+      if (this.config.mode === 'screen') {
+        if (prevMode !== 'screen' || (this.config.screenSourceId && this.config.screenSourceId !== prevScreenId)) {
+          this.stopScreenCapture()
+          this.ensureScreenCapture().catch(console.error)
+        }
+      } else if (prevMode === 'screen') {
+        this.stopScreenCapture()
+      }
+    }
   }
 
   public getConfig(): SyncEngineConfig {
@@ -297,6 +320,192 @@ export class MusicSyncEngine {
       return devices.filter((d) => d.kind === 'audioinput')
     } catch {
       return []
+    }
+  }
+
+  // --- Screen Sources for Ambilight ---
+  public static async getScreenSources(): Promise<{ id: string; name: string }[]> {
+    if (window.api && window.api.getDesktopSources) {
+      try {
+        const sources = await window.api.getDesktopSources()
+        return sources || []
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+
+  public async ensureScreenCapture(): Promise<void> {
+    if (this.screenStream && this.screenStream.active) return
+
+    try {
+      let sourceId = this.config.screenSourceId
+      if (!sourceId) {
+        const sources = (await window.api?.getDesktopSources?.()) || []
+        sourceId = sources[0]?.id
+      }
+
+      if (!sourceId) {
+        console.warn('No desktop source found for screen capture')
+        return
+      }
+
+      const constraints: MediaStreamConstraints = {
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            minWidth: 320,
+            maxWidth: 1280,
+            minHeight: 180,
+            maxHeight: 720,
+            maxFrameRate: 30
+          }
+        } as unknown as MediaTrackConstraints
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
+      this.screenStream = stream
+
+      const video = document.createElement('video')
+      video.muted = true
+      video.playsInline = true
+      video.autoplay = true
+      video.srcObject = stream
+      await video.play().catch(() => {})
+      this.screenVideo = video
+
+      const canvas = document.createElement('canvas')
+      canvas.width = 32
+      canvas.height = 32
+      this.screenCanvas = canvas
+      this.screenCtx = canvas.getContext('2d', { willReadFrequently: true })
+      console.log('Screen Ambilight capture started for source:', sourceId)
+    } catch (err) {
+      console.error('Failed to initialize screen capture:', err)
+    }
+  }
+
+  public stopScreenCapture(): void {
+    if (this.screenStream) {
+      this.screenStream.getTracks().forEach((track) => track.stop())
+      this.screenStream = null
+    }
+    if (this.screenVideo) {
+      this.screenVideo.pause()
+      this.screenVideo.srcObject = null
+      this.screenVideo = null
+    }
+    this.screenCanvas = null
+    this.screenCtx = null
+  }
+
+  private extractScreenColor(): { r: number; g: number; b: number } {
+    if (!this.screenVideo || !this.screenCtx || !this.screenCanvas) {
+      return this.lastScreenRgb
+    }
+
+    if (this.screenVideo.readyState < 2) {
+      return this.lastScreenRgb
+    }
+
+    try {
+      this.screenCtx.drawImage(this.screenVideo, 0, 0, 32, 32)
+      const imgData = this.screenCtx.getImageData(0, 0, 32, 32).data
+
+      // 24 hue bins (15 deg each)
+      const numBins = 24
+      const bucketWeights = new Float32Array(numBins)
+      const bucketR = new Float32Array(numBins)
+      const bucketG = new Float32Array(numBins)
+      const bucketB = new Float32Array(numBins)
+
+      let fallbackR = 0
+      let fallbackG = 0
+      let fallbackB = 0
+      let fallbackCount = 0
+
+      for (let i = 0; i < imgData.length; i += 4) {
+        const r = imgData[i]
+        const g = imgData[i + 1]
+        const b = imgData[i + 2]
+
+        const max = Math.max(r, g, b)
+        const min = Math.min(r, g, b)
+        const diff = max - min
+
+        if (max > 25) {
+          fallbackR += r
+          fallbackG += g
+          fallbackB += b
+          fallbackCount++
+        }
+
+        // Skip dark/black pixels (letterbox, dark scenes)
+        if (max < 35) continue
+
+        const sat = max === 0 ? 0 : diff / max
+        // Skip washed out pure whites/light greys
+        if (sat < 0.14 && max > 210) continue
+
+        let hue = 0
+        if (diff !== 0) {
+          if (max === r) hue = ((g - b) / diff) % 6
+          else if (max === g) hue = (b - r) / diff + 2
+          else hue = (r - g) / diff + 4
+          hue = Math.round(hue * 60)
+          if (hue < 0) hue += 360
+        }
+
+        const weight = Math.pow(sat, 1.4) * (max / 255)
+        const bin = Math.min(numBins - 1, Math.floor(hue / 15))
+
+        bucketWeights[bin] += weight
+        bucketR[bin] += r * weight
+        bucketG[bin] += g * weight
+        bucketB[bin] += b * weight
+      }
+
+      let bestBin = -1
+      let maxScore = 0
+      for (let b = 0; b < numBins; b++) {
+        if (bucketWeights[b] > maxScore) {
+          maxScore = bucketWeights[b]
+          bestBin = b
+        }
+      }
+
+      let targetR: number
+      let targetG: number
+      let targetB: number
+
+      if (bestBin !== -1 && maxScore > 0.4) {
+        targetR = Math.round(bucketR[bestBin] / bucketWeights[bestBin])
+        targetG = Math.round(bucketG[bestBin] / bucketWeights[bestBin])
+        targetB = Math.round(bucketB[bestBin] / bucketWeights[bestBin])
+      } else if (fallbackCount > 0) {
+        targetR = Math.round(fallbackR / fallbackCount)
+        targetG = Math.round(fallbackG / fallbackCount)
+        targetB = Math.round(fallbackB / fallbackCount)
+      } else {
+        targetR = this.lastScreenRgb.r
+        targetG = this.lastScreenRgb.g
+        targetB = this.lastScreenRgb.b
+      }
+
+      const smooth = 0.25
+      this.lastScreenRgb = {
+        r: Math.round(this.lastScreenRgb.r * (1 - smooth) + targetR * smooth),
+        g: Math.round(this.lastScreenRgb.g * (1 - smooth) + targetG * smooth),
+        b: Math.round(this.lastScreenRgb.b * (1 - smooth) + targetB * smooth)
+      }
+
+      this.lastScreenHsv = rgbToHsv(this.lastScreenRgb.r, this.lastScreenRgb.g, this.lastScreenRgb.b)
+      return this.lastScreenRgb
+    } catch {
+      return this.lastScreenRgb
     }
   }
 
@@ -384,6 +593,9 @@ export class MusicSyncEngine {
 
       this.freqData = new Uint8Array(this.analyser.frequencyBinCount)
 
+      if (this.config.mode === 'screen') {
+        await this.ensureScreenCapture()
+      }
       this.isRunning = true
       this.startLoops()
       return true
@@ -396,6 +608,7 @@ export class MusicSyncEngine {
 
   public stop() {
     this.isRunning = false
+    this.stopScreenCapture()
 
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId)
@@ -618,7 +831,8 @@ export class MusicSyncEngine {
         currentG: rgb.g,
         currentB: rgb.b,
         currentDimming: this.currentDimming,
-        frequencyData: this.freqData
+        frequencyData: this.freqData,
+        screenColor: this.config.mode === 'screen' ? this.lastScreenRgb : undefined
       })
     }
   }
@@ -721,6 +935,19 @@ export class MusicSyncEngine {
           h: ambientHsv.h,
           s: Math.max(0.5, ambientHsv.s * 0.85),
           v: Math.max(0.15, energy * 0.7)
+        }
+      }
+
+      case 'screen': {
+        this.extractScreenColor()
+        const hue = this.lastScreenHsv.h
+        const saturation = Math.min(1, Math.max(0.65, this.lastScreenHsv.s * 1.2))
+        // Audio analyzer drives dynamic brightness value
+        const value = Math.max(0.12, energy * 0.85 + this.beatPulse * 0.35)
+        return {
+          h: hue,
+          s: saturation,
+          v: value
         }
       }
     }

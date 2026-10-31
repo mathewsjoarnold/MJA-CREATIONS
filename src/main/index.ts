@@ -138,6 +138,11 @@ if (!gotTheLock) {
 
     mainWindow.once('ready-to-show', () => {
       createTray(mainWindow, app, bulbHelper)
+      setTimeout(() => {
+        if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+          mainWindow.show()
+        }
+      }, 1000)
     })
 
     mainWindow.on('close', () => {

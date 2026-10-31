@@ -5,20 +5,20 @@ import { autoUpdater } from 'electron-updater'
 
 const registerIPCEvents = (BulbManager: BulbManager) => {
   // --- Active bulb operations ---
-  ipcMain.on('toggle-bulb-state', async () => {
-    await BulbManager.toggleBulb()
+  ipcMain.on('toggle-bulb-state', async (_, targetIp?: string) => {
+    await BulbManager.toggleBulb(targetIp)
   })
 
-  ipcMain.on('set-brightness', async (_, brightness) => {
-    await BulbManager.setBrightness(brightness)
+  ipcMain.on('set-brightness', async (_, brightness: number, targetIp?: string) => {
+    await BulbManager.setBrightness(brightness, targetIp)
   })
 
   ipcMain.on('set-bulb-name', async (_, name, ip) => {
     await BulbManager.setBulbName(name, ip)
   })
 
-  ipcMain.on('set-scene', async (_, sceneId) => {
-    await BulbManager.setScene(sceneId)
+  ipcMain.on('set-scene', async (_, sceneId: number, targetIp?: string) => {
+    await BulbManager.setScene(sceneId, targetIp)
   })
 
   ipcMain.on('add-custom-color', async (_, colorName, colorHex) => {
@@ -29,8 +29,8 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
     BulbManager.syncBulbColor(data.r, data.g, data.b, data.dimming, data.ip)
   })
 
-  ipcMain.on('set-custom-color', async (_, colorId) => {
-    await BulbManager.setCustomColor(colorId)
+  ipcMain.on('set-custom-color', async (_, colorId: number, targetIp?: string) => {
+    await BulbManager.setCustomColor(colorId, targetIp)
   })
 
   ipcMain.on('edit-color', async (_, colorId, colorName, colorHex) => {
@@ -81,7 +81,14 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
   // --- Queries ---
   ipcMain.handle('get-desktop-sources', async () => {
     try {
-      return await desktopCapturer.getSources({ types: ['screen'] })
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 0, height: 0 }
+      })
+      return sources.map((s) => ({
+        id: s.id,
+        name: s.name
+      }))
     } catch {
       return []
     }

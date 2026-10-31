@@ -15,14 +15,16 @@ const api = {
   // Active bulb operations
   syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string }) =>
     ipcRenderer.send('sync-bulb-color', data),
-  toggleBulb: () => ipcRenderer.send('toggle-bulb-state'),
-  setBrightness: (brightness: number) => ipcRenderer.send('set-brightness', brightness),
+  toggleBulb: (targetIp?: string) => ipcRenderer.send('toggle-bulb-state', targetIp),
+  setBrightness: (brightness: number, targetIp?: string) =>
+    ipcRenderer.send('set-brightness', brightness, targetIp),
   setBulbName: (name: string, ip?: string) => ipcRenderer.send('set-bulb-name', name, ip),
-  setScene: (sceneId: number) => ipcRenderer.send('set-scene', sceneId),
+  setScene: (sceneId: number, targetIp?: string) => ipcRenderer.send('set-scene', sceneId, targetIp),
   toggleFavoriteColor: (colorId: number) => ipcRenderer.send('toggle-favorite-color', colorId),
   addCustomColor: (colorName: string, colorHex: string) =>
     ipcRenderer.send('add-custom-color', colorName, colorHex),
-  setCustomColor: (colorId: number) => ipcRenderer.send('set-custom-color', colorId),
+  setCustomColor: (colorId: number, targetIp?: string) =>
+    ipcRenderer.send('set-custom-color', colorId, targetIp),
   editCustomColor: (colorId: number, colorName: string, colorHex: string) =>
     ipcRenderer.send('edit-color', colorId, colorName, colorHex),
   removeCustomColor: (colorId: number) => ipcRenderer.send('remove-color', colorId),

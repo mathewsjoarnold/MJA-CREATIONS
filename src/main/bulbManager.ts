@@ -572,22 +572,68 @@ class BulbManager {
     this.sendStateToRenderer()
   }
 
-  @needsViewUpdate('toggle active bulb')
-  public async toggleBulb() {
-    if (!this.activeBulbIp) return
-    await this.toggleBulbByIp(this.activeBulbIp)
+  @needsViewUpdate('toggle bulb')
+  public async toggleBulb(targetIp?: string) {
+    if (targetIp === 'all') {
+      const anyOn = Array.from(this.bulbStates.values()).some((s) => s.state)
+      const targetState = !anyOn
+
+      for (const [ip, state] of this.bulbStates) {
+        let bulb = this.bulbs.get(ip)
+        if (!bulb) {
+          bulb = new Bulb(ip, { port: state.port || 38899 })
+          this.bulbs.set(ip, bulb)
+        }
+        try {
+          state.state = targetState
+          state.connectionStatus = 'connected'
+          bulb.sendRaw({ method: 'setPilot', params: { state: targetState } }, false).catch(() => {})
+          setTimeout(() => {
+            bulb?.sendRaw({ method: 'setPilot', params: { state: targetState } }, false).catch(() => {})
+          }, 50)
+        } catch (e) {
+          log.warn(`Failed to toggle bulb at ${ip}:`, e)
+        }
+      }
+      this.sendStateToRenderer()
+      return
+    }
+
+    const ip = targetIp || this.activeBulbIp
+    if (!ip) return
+    await this.toggleBulbByIp(ip)
   }
 
   @needsViewUpdate('set brightness')
-  public async setBrightness(dimming: number) {
-    if (!this.activeBulbIp) return
-    const state = this.getActiveBulb()
+  public async setBrightness(dimming: number, targetIp?: string) {
+    if (targetIp === 'all') {
+      for (const [ip, state] of this.bulbStates) {
+        let bulb = this.bulbs.get(ip)
+        if (!bulb) {
+          bulb = new Bulb(ip, { port: state.port || 38899 })
+          this.bulbs.set(ip, bulb)
+        }
+        try {
+          state.dimming = dimming
+          state.connectionStatus = 'connected'
+          bulb.sendRaw({ method: 'setPilot', params: { dimming } }, false).catch(() => {})
+        } catch (e) {
+          log.warn(`Failed to set brightness at ${ip}:`, e)
+        }
+      }
+      this.sendStateToRenderer()
+      return
+    }
+
+    const ip = targetIp || this.activeBulbIp
+    if (!ip) return
+    const state = this.bulbStates.get(ip)
     if (!state) return
 
-    let bulb = this.getActiveBulbInstance()
+    let bulb = this.bulbs.get(ip)
     if (!bulb) {
-      bulb = new Bulb(this.activeBulbIp, { port: state.port || 38899 })
-      this.bulbs.set(this.activeBulbIp, bulb)
+      bulb = new Bulb(ip, { port: state.port || 38899 })
+      this.bulbs.set(ip, bulb)
     }
 
     try {
@@ -597,7 +643,7 @@ class BulbManager {
 
       bulb.sendRaw({ method: 'setPilot', params: { dimming } }, false).catch(() => {})
     } catch (e) {
-      log.warn(`Failed to set brightness at ${this.activeBulbIp}:`, e)
+      log.warn(`Failed to set brightness at ${ip}:`, e)
     }
   }
 
@@ -618,15 +664,39 @@ class BulbManager {
   }
 
   @needsViewUpdate('set scene')
-  public async setScene(sceneId: number) {
-    if (!this.activeBulbIp) return
-    const state = this.getActiveBulb()
+  public async setScene(sceneId: number, targetIp?: string) {
+    if (targetIp === 'all') {
+      for (const [ip, state] of this.bulbStates) {
+        let bulb = this.bulbs.get(ip)
+        if (!bulb) {
+          bulb = new Bulb(ip, { port: state.port || 38899 })
+          this.bulbs.set(ip, bulb)
+        }
+        try {
+          state.state = true
+          state.sceneId = sceneId
+          state.connectionStatus = 'connected'
+          bulb.sendRaw({ method: 'setPilot', params: { sceneId } }, false).catch(() => {})
+          setTimeout(() => {
+            bulb?.sendRaw({ method: 'setPilot', params: { sceneId } }, false).catch(() => {})
+          }, 50)
+        } catch (e) {
+          log.warn(`Failed to set scene at ${ip}:`, e)
+        }
+      }
+      this.sendStateToRenderer()
+      return
+    }
+
+    const ip = targetIp || this.activeBulbIp
+    if (!ip) return
+    const state = this.bulbStates.get(ip)
     if (!state) return
 
-    let bulb = this.getActiveBulbInstance()
+    let bulb = this.bulbs.get(ip)
     if (!bulb) {
-      bulb = new Bulb(this.activeBulbIp, { port: state.port || 38899 })
-      this.bulbs.set(this.activeBulbIp, bulb)
+      bulb = new Bulb(ip, { port: state.port || 38899 })
+      this.bulbs.set(ip, bulb)
     }
 
     try {
@@ -640,23 +710,52 @@ class BulbManager {
         bulb?.sendRaw({ method: 'setPilot', params: { sceneId } }, false).catch(() => {})
       }, 50)
     } catch (e) {
-      log.warn('Failed to set scene at ' + this.activeBulbIp + ':', e)
+      log.warn('Failed to set scene at ' + ip + ':', e)
     }
   }
 
   @needsViewUpdate('set custom color')
-  public async setCustomColor(colorId: number) {
-    if (!this.activeBulbIp) return
-    const state = this.getActiveBulb()
-    if (!state) return
-
+  public async setCustomColor(colorId: number, targetIp?: string) {
     const color = this.appData.customColors.find((c) => c.id === colorId)
     if (!color) return
 
-    let bulb = this.getActiveBulbInstance()
+    const hex = color.hex.replace('#', '')
+    const r = parseInt(hex.substring(0, 2), 16) || 0
+    const g = parseInt(hex.substring(2, 4), 16) || 0
+    const b = parseInt(hex.substring(4, 6), 16) || 0
+
+    if (targetIp === 'all') {
+      for (const [ip, state] of this.bulbStates) {
+        let bulb = this.bulbs.get(ip)
+        if (!bulb) {
+          bulb = new Bulb(ip, { port: state.port || 38899 })
+          this.bulbs.set(ip, bulb)
+        }
+        try {
+          state.state = true
+          state.sceneId = colorId
+          state.connectionStatus = 'connected'
+          bulb.sendRaw({ method: 'setPilot', params: { r, g, b } }, false).catch(() => {})
+          setTimeout(() => {
+            bulb?.sendRaw({ method: 'setPilot', params: { r, g, b } }, false).catch(() => {})
+          }, 50)
+        } catch (e) {
+          log.warn(`Failed to set custom color at ${ip}:`, e)
+        }
+      }
+      this.sendStateToRenderer()
+      return
+    }
+
+    const ip = targetIp || this.activeBulbIp
+    if (!ip) return
+    const state = this.bulbStates.get(ip)
+    if (!state) return
+
+    let bulb = this.bulbs.get(ip)
     if (!bulb) {
-      bulb = new Bulb(this.activeBulbIp, { port: state.port || 38899 })
-      this.bulbs.set(this.activeBulbIp, bulb)
+      bulb = new Bulb(ip, { port: state.port || 38899 })
+      this.bulbs.set(ip, bulb)
     }
 
     try {
@@ -665,17 +764,12 @@ class BulbManager {
       state.connectionStatus = 'connected'
       this.sendStateToRenderer()
 
-      const hex = color.hex.replace('#', '')
-      const r = parseInt(hex.substring(0, 2), 16) || 0
-      const g = parseInt(hex.substring(2, 4), 16) || 0
-      const b = parseInt(hex.substring(4, 6), 16) || 0
-
       bulb.sendRaw({ method: 'setPilot', params: { r, g, b } }, false).catch(() => {})
       setTimeout(() => {
         bulb?.sendRaw({ method: 'setPilot', params: { r, g, b } }, false).catch(() => {})
       }, 50)
     } catch (e) {
-      log.warn('Failed to set custom color at ' + this.activeBulbIp + ':', e)
+      log.warn('Failed to set custom color at ' + ip + ':', e)
     }
   }
 

@@ -20,13 +20,15 @@ export default function CustomSceneItem({
   kebabMenuOptions
 }: CustomSceneItemProps) {
   const bulb = useBulbStore((state) => state.activeBulb)
+  const isAllSelected = useBulbStore((state) => state.isAllSelected)
+  const bulbs = useBulbStore((state) => state.bulbs)
   const setCustomColor = useBulbStore((state) => state.setCustomColor)
 
   const handleSetCustomColor = () => {
     setCustomColor(id)
   }
 
-  const active = id === bulb.sceneId
+  const active = isAllSelected ? bulbs.some((b) => b.sceneId === id) : id === bulb?.sceneId
 
   return (
     <div

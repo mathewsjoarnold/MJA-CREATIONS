@@ -1,13 +1,16 @@
+import { useBulbStore } from '@renderer/context/BulbStore'
 import CustomScene from '@renderer/components/CustomScene'
 import FavoriteScene from '@renderer/components/FavoriteScene'
 import Scene from '@renderer/components/Scene'
 import useDebounce from '@renderer/hooks/useDebounce'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LuSearch, LuX } from 'react-icons/lu'
+import { LuLayers, LuSearch, LuX } from 'react-icons/lu'
 
 export default function Scenes() {
   const { t } = useTranslation()
+  const isAllSelected = useBulbStore((state) => state.isAllSelected)
+  const bulbs = useBulbStore((state) => state.bulbs)
   const [searchValue, setSearchValue] = useState('')
   const [areScenes, setAreScenes] = useState(true)
   const debouncedSearch = useDebounce(searchValue, 500)
@@ -85,7 +88,15 @@ export default function Scenes() {
   return (
     <section className="py-8 px-8 w-full">
       <div className="flex justify-between items-center">
-        <h1 className="font-bold text-4xl">{t('scenes.title')}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="font-bold text-4xl">{t('scenes.title')}</h1>
+          {isAllSelected && bulbs.length > 1 && (
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-primary/20 text-blue-300 border border-primary/40 shadow-sm animate-pulse-fade-in">
+              <LuLayers size={13} />
+              <span>Applying to {bulbs.length === 2 ? 'Both Lights' : 'All Bulbs'}</span>
+            </span>
+          )}
+        </div>
         <div className="relative flex bg-secondary-700 text-white ps-4 py-1 rounded-xl items-center focus-within:outline-none transition duration-300 focus-within:ring-primary focus-within:ring-2 gap-2">
           <LuSearch size={18} className="text-neutral-500" />
           <input

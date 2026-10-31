@@ -3,11 +3,12 @@ import KebabMenu from '@components/ui/KebabMenu'
 import PowerButton from '@components/ui/PowerButton'
 import { BulbState } from '@shared/types/bulbState'
 import { ReactNode, useState } from 'react'
-import { LuLoaderCircle, LuRefreshCw } from 'react-icons/lu'
+import { LuLayers, LuLoaderCircle, LuRefreshCw } from 'react-icons/lu'
 
 type BulbCardProps = {
   bulb: BulbState
   isActive: boolean
+  isGroupActive?: boolean
   onSelect: () => void
   onToggle: () => void
   onReconnect?: () => void
@@ -21,6 +22,7 @@ type BulbCardProps = {
 export default function BulbCard({
   bulb,
   isActive,
+  isGroupActive,
   onSelect,
   onToggle,
   onReconnect,
@@ -60,6 +62,16 @@ export default function BulbCard({
           >
             {bulb.name}
           </p>
+
+          {isGroupActive && (
+            <span
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-primary/25 text-blue-300 border border-primary/40 shrink-0"
+              title="Linked together with all lights"
+            >
+              <LuLayers size={10} />
+              <span>Linked</span>
+            </span>
+          )}
 
           {isConnecting && (
             <span

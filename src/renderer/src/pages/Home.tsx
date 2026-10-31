@@ -9,10 +9,10 @@ import { useBulbStore } from '@renderer/context/BulbStore'
 import { HomeModalState, ModalType } from '@renderer/types/modals'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LuCirclePlus, LuSquarePen, LuToggleLeft, LuTrash } from 'react-icons/lu'
+import { LuCirclePlus, LuLayers, LuSquarePen, LuToggleLeft, LuTrash } from 'react-icons/lu'
 
 export default function Home() {
-  const { bulbs, activeBulb, isDiscovering, toggleBulbByIp, setActiveBulb, deleteBulb, reconnectBulb, isReady } =
+  const { bulbs, activeBulb, isAllSelected, setIsAllSelected, toggleSelectAll, isDiscovering, toggleBulbByIp, setActiveBulb, deleteBulb, reconnectBulb, isReady } =
     useBulbStore()
   const { t } = useTranslation()
   const [modals, setModals] = useState<HomeModalState>({
@@ -82,20 +82,70 @@ export default function Home() {
       <h1 className="font-bold text-4xl">{t('home.title')}</h1>
       <h2 className="text-sm lg:text-lg mt-2 text-neutral-400 font-medium">{t('home.subtitle')}</h2>
 
-      {activeBulb && (
-        <p className="mt-10 text-sm text-neutral-400 font-medium">
-          {t('home.selectedBulb')}:{' '}
-          <span className="text-primary font-semibold">{activeBulb.name}</span>
-        </p>
-      )}
+      <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-sm text-neutral-400 font-medium">
+            {t('home.selectedBulb')}:{' '}
+            {isAllSelected ? (
+              <span className="text-primary font-semibold inline-flex items-center gap-1.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-primary shadow-[0_0_8px_#3b82f6] animate-pulse" />
+                {t('home.allBulbs', { defaultValue: 'All Bulbs' })} ({bulbs.length} {t('home.lightsLinked', { defaultValue: 'lights linked' })})
+              </span>
+            ) : activeBulb ? (
+              <span className="text-primary font-semibold">{activeBulb.name}</span>
+            ) : (
+              <span className="text-neutral-500 font-semibold">{t('home.none', { defaultValue: 'None' })}</span>
+            )}
+          </p>
+          {isAllSelected && (
+            <p className="text-xs text-blue-400/80 mt-1 flex items-center gap-1.5">
+              <span>✨ {t('home.syncHint', { defaultValue: 'Any mode, effect, or brightness applied will sync to both lights simultaneously' })}</span>
+            </p>
+          )}
+        </div>
+
+        {bulbs.length > 1 && (
+          <button
+            type="button"
+            onClick={toggleSelectAll}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium text-xs sm:text-sm transition-all duration-200 cursor-pointer shadow-md select-none active:scale-95 ${
+              isAllSelected
+                ? 'bg-primary hover:bg-primary-600 text-white ring-2 ring-primary/80 shadow-[0_0_18px_rgba(55,114,255,0.45)] font-semibold'
+                : 'bg-secondary hover:bg-secondary-600 text-neutral-200 border border-neutral-700/60 hover:border-neutral-500'
+            }`}
+            title={
+              isAllSelected
+                ? t('home.allSelectedTooltip', { defaultValue: 'All bulbs are linked. Click to select bulbs individually.' })
+                : t('home.selectAllTooltip', { defaultValue: 'Click to select and control both lights together.' })
+            }
+          >
+            <LuLayers size={18} className={isAllSelected ? 'text-white' : 'text-neutral-400'} />
+            <span>
+              {isAllSelected
+                ? bulbs.length === 2
+                  ? t('home.bothSelected', { defaultValue: 'Both Lights Selected (Linked)' })
+                  : t('home.allSelected', { defaultValue: 'All Bulbs Selected (Linked)' })
+                : bulbs.length === 2
+                  ? t('home.changeBoth', { defaultValue: 'Change Both Lights Together' })
+                  : t('home.changeAll', { defaultValue: 'Change All Bulbs Together' })}
+            </span>
+          </button>
+        )}
+      </div>
 
       <article className="mt-4 grid grid-cols-3 gap-x-4 gap-y-4 lg:gap-y-6 lg:grid-cols-4 xl:grid-cols-5">
         {bulbs.map((b) => (
           <BulbCard
             key={b.ip}
             bulb={b}
-            isActive={b.ip === activeBulb?.ip}
-            onSelect={() => setActiveBulb(b.ip)}
+            isActive={isAllSelected || b.ip === activeBulb?.ip}
+            isGroupActive={isAllSelected}
+            onSelect={() => {
+              if (isAllSelected) {
+                setIsAllSelected(false)
+              }
+              setActiveBulb(b.ip)
+            }}
             onToggle={() => toggleBulbByIp(b.ip)}
             onReconnect={() => reconnectBulb(b.ip)}
             menuItems={getMenuItemsForBulb(b.ip)}

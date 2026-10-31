@@ -12,6 +12,7 @@ interface BulbStore {
   isDiscovering: boolean
   discoveryFailed: boolean
   isReady: boolean
+  isAllSelected: boolean
 
   // Toast state
   toasts: ToastMessage[]
@@ -20,6 +21,10 @@ interface BulbStore {
   updateMultiBulbState: (state: MultiBulbState) => void
   addToast: (toast: ToastMessage) => void
   dismissToast: (id: string) => void
+
+  // Selection
+  setIsAllSelected: (isAll: boolean) => void
+  toggleSelectAll: () => void
 
   // Active bulb operations
   toggleBulb: () => Promise<void>
@@ -49,6 +54,7 @@ export const useBulbStore = create<BulbStore>((set) => ({
   isDiscovering: true,
   discoveryFailed: false,
   isReady: false,
+  isAllSelected: false,
 
   toasts: [],
 
@@ -65,27 +71,42 @@ export const useBulbStore = create<BulbStore>((set) => ({
   dismissToast: (id: string) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
+  setIsAllSelected: (isAll: boolean) => set({ isAllSelected: isAll }),
+
+  toggleSelectAll: () =>
+    set((state) => {
+      const next = !state.isAllSelected
+      return {
+        isAllSelected: next,
+        // Ensure activeBulb is set to first available bulb if not already set
+        activeBulb: state.activeBulb || (state.bulbs.length > 0 ? state.bulbs[0] : null)
+      }
+    }),
+
   // Active bulb operations
   toggleBulb: async () => {
-    log.debug('[RENDERER] Toggling active bulb')
-    await window.api.toggleBulb()
+    const isAll = useBulbStore.getState().isAllSelected
+    log.debug(`[RENDERER] Toggling bulb (all=${isAll})`)
+    await window.api.toggleBulb(isAll ? 'all' : undefined)
   },
   setBrightness: async (brightness: number) => {
-    log.debug('[RENDERER] Setting brightness')
-    await window.api.setBrightness(brightness)
+    const isAll = useBulbStore.getState().isAllSelected
+    log.debug(`[RENDERER] Setting brightness (all=${isAll})`)
+    await window.api.setBrightness(brightness, isAll ? 'all' : undefined)
   },
   setBulbName: async (name: string) => {
     log.debug('[RENDERER] Setting bulb name')
     await window.api.setBulbName(name)
   },
   setScene: async (sceneId: number) => {
+    const isAll = useBulbStore.getState().isAllSelected
     if (sceneId >= MAX_DEFAULT_COLORS) {
       log.debug('[RENDERER] Trying to set a custom color')
       return useBulbStore.getState().setCustomColor(sceneId)
     }
 
-    log.debug('[RENDERER] Setting scene')
-    await window.api.setScene(sceneId)
+    log.debug(`[RENDERER] Setting scene ${sceneId} (all=${isAll})`)
+    await window.api.setScene(sceneId, isAll ? 'all' : undefined)
   },
   addCustomColor: async (colorName: string, colorHex: string) => {
     const activeBulb = useBulbStore.getState().activeBulb
@@ -101,13 +122,14 @@ export const useBulbStore = create<BulbStore>((set) => ({
     await window.api.addCustomColor(colorName, colorHex)
   },
   setCustomColor: async (colorId: number) => {
+    const isAll = useBulbStore.getState().isAllSelected
     if (colorId < MAX_DEFAULT_COLORS) {
       log.debug('[RENDERER] Trying to set a default color')
       return useBulbStore.getState().setScene(colorId)
     }
 
-    log.debug('[RENDERER] Setting custom color')
-    await window.api.setCustomColor(colorId)
+    log.debug(`[RENDERER] Setting custom color ${colorId} (all=${isAll})`)
+    await window.api.setCustomColor(colorId, isAll ? 'all' : undefined)
   },
   editCustomColor: async (colorId: number, colorName: string, colorHex: string) => {
     log.debug('[RENDERER] Editing custom color')
@@ -133,6 +155,7 @@ export const useBulbStore = create<BulbStore>((set) => ({
   // Multi-bulb actions
   setActiveBulb: (ip: string) => {
     log.debug('[RENDERER] Setting active bulb:', ip)
+    set({ isAllSelected: false })
     window.api.setActiveBulb(ip)
   },
   toggleBulbByIp: (ip: string) => {
