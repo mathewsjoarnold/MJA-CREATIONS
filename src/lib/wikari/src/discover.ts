@@ -3,22 +3,10 @@ import { Bulb } from "./bulb";
 import { DEFAULT_DISCOVER_WAIT_MS, WIZ_BULB_LISTEN_PORT } from "./constants";
 import { checkType } from "./type-checker";
 import { GetPilotMsg, getPilotResponseTemplate } from "./types";
-import { getBroadcastAddresses, sleep } from "./utils";
+import { getBroadcastAddresses } from "./utils";
 
 /**
- * Discovers bulbs on a network.
- * This is done by sending a request and creating bulb instances from the devices
- * that respond.
- *
- * The first argument contains options for discovery, them being:
- * * addr: the address to send the request on (ideally a broadcast address)
- * * port: the port that the bulbs listen on
- * * waitMs: how long to wait for a response from the bulb
- *
- * If your local IP addresses do not start with 192.168.1, you'll need to
- * pass a custom addr.
- *
- * @returns an array of {@link Bulb} instances corresponding to discovered bulbs
+ * Discovers bulbs on a network using high-resilience UDP multi-bursting.
  */
 export async function discover({
 	addr,
@@ -42,41 +30,66 @@ export async function discover({
 		targets.push("255.255.255.255");
 	}
 
-	client.on("listening", function () {
-		client.setBroadcast(true);
-	});
+	return new Promise<Bulb[]>((resolve) => {
+		let isDone = false;
+		let timeoutId: NodeJS.Timeout | null = null;
+		let burst1: NodeJS.Timeout | null = null;
+		let burst2: NodeJS.Timeout | null = null;
 
-	// Bind to a random port to allow sending
-	client.bind(() => {
-		for (const target of targets) {
+		const cleanup = () => {
+			if (isDone) return;
+			isDone = true;
+			if (timeoutId) clearTimeout(timeoutId);
+			if (burst1) clearTimeout(burst1);
+			if (burst2) clearTimeout(burst2);
 			try {
-				client.send(JSON.stringify(message), port, target);
-			} catch (e) {
-				// Ignore send errors for specific interfaces
+				client.off("message", listener);
+				client.close();
+			} catch {}
+			resolve(bulbs);
+		};
+
+		const sendProbe = () => {
+			if (isDone) return;
+			for (const target of targets) {
+				try {
+					client.send(JSON.stringify(message), port, target);
+				} catch {}
 			}
-		}
-	});
+		};
 
-	const listener = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
-		try {
-			const response = JSON.parse(msg.toString());
-
-			if (checkType(getPilotResponseTemplate, response)) {
-				// Avoid duplicates
-				if (!bulbs.some(b => b.address === rinfo.address)) {
-					bulbs.push(new Bulb(rinfo.address, { port }));
+		const listener = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
+			try {
+				const response = JSON.parse(msg.toString());
+				if (checkType(getPilotResponseTemplate, response)) {
+					if (!bulbs.some((b) => b.address === rinfo.address)) {
+						bulbs.push(new Bulb(rinfo.address, { port }));
+						// When probing a specific IP, resolve early as soon as it responds
+						if (addr && rinfo.address === addr) {
+							cleanup();
+						}
+					}
 				}
-			}
-		} catch (e) {
-			// Ignore invalid JSON or malformed packets
-		}
-	};
+			} catch {}
+		};
 
-	client.on("message", listener);
-	await sleep(waitMs);
-	client.off("message", listener);
+		client.on("message", listener);
 
-	client.close();
+		client.on("listening", function () {
+			try {
+				client.setBroadcast(true);
+			} catch {}
+		});
 
-	return bulbs;
+		client.bind(() => {
+			sendProbe();
+			// Multi-packet bursts defeat 2.4 GHz packet drop
+			burst1 = setTimeout(sendProbe, 120);
+			burst2 = setTimeout(sendProbe, 260);
+		});
+
+		timeoutId = setTimeout(() => {
+			cleanup();
+		}, waitMs);
+	});
 }
