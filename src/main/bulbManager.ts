@@ -96,9 +96,6 @@ class BulbManager {
           connectionStatus: 'connecting'
         })
       }
-      if (!this.bulbs.has(entry.bulbIp)) {
-        this.bulbs.set(entry.bulbIp, new Bulb(entry.bulbIp, { port: 38899 }))
-      }
     }
 
     if (!this.activeBulbIp && this.appData.activeBulbIp) {
