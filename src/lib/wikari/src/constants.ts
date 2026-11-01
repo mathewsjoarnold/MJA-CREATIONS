@@ -4,7 +4,7 @@ export const DEFAULT_RESPONSE_WAIT_MS = 2000;
 
 // ports
 export const WIZ_BULB_LISTEN_PORT = 38899;
-export const UDP_BROADCAST_LISTEN_PORT = 38900;
+export const UDP_BROADCAST_LISTEN_PORT = 0;
 
 // miscellaneous
 export const HEX_COLOR_REGEX = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i;

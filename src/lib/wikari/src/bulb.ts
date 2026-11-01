@@ -84,7 +84,7 @@ export class Bulb {
 			try {
 				Bulb.client = dgram.createSocket({ type: "udp4", reuseAddr: true });
 			} catch {}
-			this.initClient();
+			this.initClient().catch(() => {});
 		}
 	}
 
@@ -393,9 +393,15 @@ export class Bulb {
 	private sendWithWait(message: Message): Promise<GenericResponse> {
 		return new Promise((resolve, reject) => {
 			let timer: ReturnType<typeof setTimeout>;
+			let retry1: ReturnType<typeof setTimeout>;
+			let retry2: ReturnType<typeof setTimeout>;
+			let isResolved = false;
 
 			const cleanup = () => {
+				isResolved = true;
 				if (timer) clearTimeout(timer);
+				if (retry1) clearTimeout(retry1);
+				if (retry2) clearTimeout(retry2);
 				Bulb.client.off("message", messageListener);
 			};
 
@@ -434,23 +440,32 @@ export class Bulb {
 			};
 			Bulb.client.on("message", messageListener);
 
-			Bulb.client.send(
-				JSON.stringify(message),
-				this.bulbPort,
-				this.address,
-				error => {
-					if (error) {
-						cleanup();
-						reject(
-							new WikariError(
-								WikariErrorCode.RequestSendError,
-								{ error },
-								"Failed to send request to bulb",
-							),
-						);
-					}
-				},
-			);
+			const doSend = () => {
+				if (isResolved) return;
+				try {
+					Bulb.client.send(
+						JSON.stringify(message),
+						this.bulbPort,
+						this.address,
+						error => {
+							if (error && !isResolved) {
+								cleanup();
+								reject(
+									new WikariError(
+										WikariErrorCode.RequestSendError,
+										{ error },
+										"Failed to send request to bulb",
+									),
+								);
+							}
+						},
+					);
+				} catch {}
+			};
+
+			doSend();
+			retry1 = setTimeout(doSend, 200);
+			retry2 = setTimeout(doSend, 500);
 
 			const getResponseTimeout = () =>
 				this.responseTimeout ?? DEFAULT_RESPONSE_WAIT_MS;
@@ -587,7 +602,7 @@ export class Bulb {
 			};
 			Bulb.client.on("error", errorCallback);
 
-			Bulb.client.bind(this.listenPort, undefined, () => {
+			Bulb.client.bind(this.listenPort || 0, undefined, () => {
 				Bulb.client.off("listening", listeningCallback);
 				Bulb.client.off("error", errorCallback);
 			});

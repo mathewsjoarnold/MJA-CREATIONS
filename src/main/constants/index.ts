@@ -3,7 +3,9 @@ import { app } from 'electron'
 import path from 'node:path'
 
 const ICON = icon
-const CONFIG = path.join(app.getPath('userData'), 'config.json')
+const CONFIG = (app && typeof app.getPath === 'function')
+  ? path.join(app.getPath('userData'), 'config.json')
+  : path.join(process.env.APPDATA || '', 'Wiz App', 'config.json')
 const MIN_WIDTH = 900
 const MIN_HEIGHT = 600
 const HIDE_MENU = true

@@ -1,7 +1,7 @@
 import { AppConfig, BulbConfigEntry } from '@/types/bulbConfig'
 import { systemConfig } from '@/types/systemConfig'
 import { CONFIG } from '@constants'
-import { Bulb, discover, SCENES } from '@lib/wikari/src/mod'
+import { Bulb, discover, SCENES, ipAddress } from '@lib/wikari/src/mod'
 import { MAX_DEFAULT_COLORS } from '@shared/constants'
 import { BulbState } from '@shared/types/bulbState'
 import { MultiBulbState } from '@shared/types/multiBulbState'
@@ -551,6 +551,17 @@ class BulbManager {
       sceneId: 0,
       dimming: 100
     }
+
+    try {
+      await bulb.sendRaw({
+        method: 'registration',
+        params: {
+          phoneMac: bulb.macIdentifier,
+          register: true,
+          phoneIp: ipAddress() || '192.168.20.4'
+        }
+      })
+    } catch {}
 
     try {
       const pilotResponse = await bulb.getPilot()

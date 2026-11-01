@@ -9,6 +9,10 @@ const initializeLogger = () => {
   process.on('uncaughtException', (error) => {
     log.error('Uncaught exception:', error)
   })
+
+  process.on('unhandledRejection', (reason) => {
+    log.error('Unhandled rejection:', reason)
+  })
 }
 
 export default initializeLogger
