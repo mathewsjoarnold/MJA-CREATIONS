@@ -2,7 +2,7 @@
 
 > **Advanced Desktop App for controlling and synchronizing WiZ Smart Lighting**
 
-Based on the foundational work by [**noturbob/wiz-pc**](https://github.com/noturbob/wiz-pc), this upgraded edition includes comprehensive multi-bulb synchronous controls, live ambient screen color & music reactive synchronization, hardware diagnostics, and a fault-tolerant discovery/reconnect engine.
+Based on the foundational project by [**MatiasTK/WizAPP**](https://github.com/MatiasTK/WizAPP), this upgraded edition includes comprehensive multi-bulb synchronous controls, live ambient screen color & music reactive synchronization, hardware diagnostics, and a fault-tolerant discovery/reconnect engine.
 
 ---
 
@@ -63,8 +63,7 @@ The compiled installer will be located in the `dist/` directory.
 
 ## 🙏 Credits & Acknowledgments
 
-* **[noturbob/wiz-pc](https://github.com/noturbob/wiz-pc)** — Special thanks to [noturbob](https://github.com/noturbob) for providing the initial WiZ PC desktop project structure and foundation.
-* **[MatiasTK/WizAPP](https://github.com/MatiasTK/WizAPP)** — Base Vite + React + Tailwind implementation.
+* **[MatiasTK/WizAPP](https://github.com/MatiasTK/WizAPP)** — Sincere thanks and credit to [MatiasTK](https://github.com/MatiasTK) for creating the original WiZ APP and providing the base project files.
 
 ---
 
