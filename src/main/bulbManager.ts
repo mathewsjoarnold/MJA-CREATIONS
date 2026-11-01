@@ -1015,11 +1015,15 @@ class BulbManager {
   }
 
   // Fast streaming sync for music visualizer (no disk logging or React store re-render on streaming frames)
-  public syncBulbColor(r: number, g: number, b: number, dimming?: number, targetIp?: string) {
-    const params: { r: number; g: number; b: number; dimming?: number } = {
-      r: Math.max(0, Math.min(255, Math.round(r))),
-      g: Math.max(0, Math.min(255, Math.round(g))),
-      b: Math.max(0, Math.min(255, Math.round(b)))
+  public syncBulbColor(r: number, g: number, b: number, dimming?: number, targetIp?: string, temp?: number) {
+    const params: { r?: number; g?: number; b?: number; dimming?: number; temp?: number } = {}
+    if (temp && temp > 0) {
+      // Dedicated white LEDs (2200K - 6500K) with zero green tint
+      params.temp = Math.max(2200, Math.min(6500, Math.round(temp)))
+    } else {
+      params.r = Math.max(0, Math.min(255, Math.round(r)))
+      params.g = Math.max(0, Math.min(255, Math.round(g)))
+      params.b = Math.max(0, Math.min(255, Math.round(b)))
     }
     if (dimming !== undefined) {
       params.dimming = Math.max(10, Math.min(100, Math.round(dimming)))

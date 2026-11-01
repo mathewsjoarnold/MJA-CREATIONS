@@ -25,8 +25,8 @@ const registerIPCEvents = (BulbManager: BulbManager) => {
     await BulbManager.addCustomColor(colorName, colorHex)
   })
 
-  ipcMain.on('sync-bulb-color', (_, data: { r: number; g: number; b: number; dimming?: number; ip?: string }) => {
-    BulbManager.syncBulbColor(data.r, data.g, data.b, data.dimming, data.ip)
+  ipcMain.on('sync-bulb-color', (_, data: { r: number; g: number; b: number; dimming?: number; ip?: string; temp?: number }) => {
+    BulbManager.syncBulbColor(data.r, data.g, data.b, data.dimming, data.ip, data.temp)
   })
 
   ipcMain.on('set-custom-color', async (_, colorId: number, targetIp?: string) => {

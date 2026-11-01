@@ -40,6 +40,8 @@ export default function MusicSync() {
   const [selectedScreenId, setSelectedScreenId] = useState<string>('')
   const [liveScreenColor, setLiveScreenColor] = useState<{ r: number; g: number; b: number } | null>(null)
   const [isDarkScreen, setIsDarkScreen] = useState<boolean>(false)
+  const [isWhiteOrGrey, setIsWhiteOrGrey] = useState<boolean>(false)
+  const [screenTemp, setScreenTemp] = useState<number>(4800)
 
   const [sensitivity, setSensitivity] = useState<number>(1.2)
   const [minBrightness, setMinBrightness] = useState<number>(15)
@@ -107,6 +109,12 @@ export default function MusicSync() {
         setLiveScreenColor(state.screenColor)
         if (state.isDarkScreen !== undefined) {
           setIsDarkScreen(state.isDarkScreen)
+        }
+        if (state.isWhiteOrGrey !== undefined) {
+          setIsWhiteOrGrey(state.isWhiteOrGrey)
+        }
+        if (state.screenTemp !== undefined) {
+          setScreenTemp(state.screenTemp)
         }
       }
     })
@@ -497,16 +505,26 @@ export default function MusicSync() {
             {liveScreenColor && (
               <div className="flex items-center gap-2 text-xs text-neutral-200 bg-neutral-900/90 px-3 py-1 rounded-lg border border-cyan-500/30">
                 <span className="text-neutral-400">
-                  {isDarkScreen ? 'Ambient Moving Gradient (Dark Scene):' : 'Live Screen Color:'}
+                  {isDarkScreen
+                    ? 'Ambient Moving Gradient (Dark Scene):'
+                    : isWhiteOrGrey
+                      ? 'Daylight White:'
+                      : 'Live Screen Color:'}
                 </span>
                 <span
                   className={`w-4 h-4 rounded-full border border-white/40 shadow-sm inline-block transition-colors duration-300 ${
                     isDarkScreen ? 'animate-pulse' : ''
                   }`}
-                  style={{ backgroundColor: `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})` }}
+                  style={{
+                    backgroundColor: isWhiteOrGrey
+                      ? '#ffffff'
+                      : `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})`
+                  }}
                 />
                 <span className="font-mono text-[11px] text-cyan-300 font-bold">
-                  rgb({liveScreenColor.r}, {liveScreenColor.g}, {liveScreenColor.b})
+                  {isWhiteOrGrey
+                    ? `${screenTemp}K White`
+                    : `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})`}
                 </span>
               </div>
             )}

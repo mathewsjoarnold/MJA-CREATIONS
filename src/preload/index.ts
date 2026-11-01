@@ -13,7 +13,7 @@ const api = {
   getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
 
   // Active bulb operations
-  syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string }) =>
+  syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string; temp?: number }) =>
     ipcRenderer.send('sync-bulb-color', data),
   toggleBulb: (targetIp?: string) => ipcRenderer.send('toggle-bulb-state', targetIp),
   setBrightness: (brightness: number, targetIp?: string) =>
