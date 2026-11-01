@@ -99,3 +99,6 @@ testing/
 .cursor
 .env
 out/
+
+push_to_github.bat
+
