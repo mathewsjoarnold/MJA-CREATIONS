@@ -472,7 +472,7 @@ export class MusicSyncEngine {
         const diff = max - min
 
         // Dark/black pixels (letterbox or dark scene)
-        if (max < 28) {
+        if (max < 22) {
           darkCount++
           continue
         }
@@ -511,8 +511,8 @@ export class MusicSyncEngine {
       const avgLum = totalLum / totalPixels
 
       // 1. Dark screen detection:
-      // When screen is mostly black, cutscene, or fade to black
-      const isDark = darkCount > totalPixels * 0.82 || (avgLum < 20 && maxLum < 36)
+      // ONLY trigger dark gradient when screen is truly pitch black (credits, black screen, black cutscene)
+      const isDark = darkCount > totalPixels * 0.88 || (avgLum < 14 && maxLum < 26)
       this.isDarkScreen = isDark
 
       let targetR: number
@@ -547,8 +547,8 @@ export class MusicSyncEngine {
         targetB = Math.round(rawAvgB)
 
         // Calculate color temperature in Kelvin (2700K Warm White to 6500K Cold White)
-        const diffRb = rawAvgR - rawAvgB
-        calculatedTemp = Math.max(2700, Math.min(6500, Math.round(4800 - diffRb * 30)))
+        const diffRb = Math.abs(rawAvgR - rawAvgB) < 8 ? 0 : rawAvgR - rawAvgB
+        calculatedTemp = Math.max(2700, Math.min(6500, Math.round(4800 - diffRb * 25)))
         this.lastScreenTemp = calculatedTemp
       } else {
         // 3. Chromatic color majority screen:
@@ -1050,12 +1050,10 @@ export class MusicSyncEngine {
           saturation = 0.72
           value = Math.max(0.18, 0.28 + energy * 0.15)
         } else if (screenRes.isWhiteOrGrey) {
-          // When screen is white or grey: true zero or low saturation!
-          // NEVER force it to 0.35!
-          saturation = Math.min(0.06, this.lastScreenHsv.s)
-          // Value reflects screen luminance (e.g. bright white vs soft grey)
-          const screenVal = this.lastScreenHsv.v
-          value = Math.max(0.2, screenVal * 0.85 + energy * 0.2)
+          // When screen is white or grey: true zero/low saturation (eliminates pink & green tint!)
+          saturation = Math.min(0.03, this.lastScreenHsv.s)
+          // Calibrate white brightness dynamically using sound/music energy (same as other modes):
+          value = Math.max(0.12, energy * 0.85 + this.beatPulse * 0.35)
         } else {
           // Natural color saturation:
           saturation = Math.min(1.0, this.lastScreenHsv.s * 1.1)
@@ -1073,16 +1071,33 @@ export class MusicSyncEngine {
 
   // --- Smart LED Hardware Calibration ---
   public static calibrateForLed(r: number, g: number, b: number): { r: number; g: number; b: number } {
-    const rN = Math.max(0, Math.min(255, r)) / 255.0
-    const gN = Math.max(0, Math.min(255, g)) / 255.0
-    const bN = Math.max(0, Math.min(255, b)) / 255.0
+    const rawR = Math.max(0, Math.min(255, Math.round(r)))
+    const rawG = Math.max(0, Math.min(255, Math.round(g)))
+    const rawB = Math.max(0, Math.min(255, Math.round(b)))
 
-    // WiZ Smart LED diode compensation:
-    // Green LED diodes have ~2.5x the luminous efficacy of Red/Blue diodes to human vision.
-    // Attenuate Green (0.74) and apply gamma curve (1.7 for Red, 1.9 for Green, 1.7 for Blue).
-    const rC = Math.pow(rN, 1.7) * 1.0
-    const gC = Math.pow(gN, 1.9) * 0.74
-    const bC = Math.pow(bN, 1.7) * 0.88
+    const hsv = rgbToHsv(rawR, rawG, rawB)
+
+    // For neutral / white / grey tones (low saturation):
+    // Do NOT attenuate green, which prevents false pink / magenta / violet shifts!
+    if (hsv.s < 0.18) {
+      return { r: rawR, g: rawG, b: rawB }
+    }
+
+    const rN = rawR / 255.0
+    const gN = rawG / 255.0
+    const bN = rawB / 255.0
+
+    let rC = rN
+    let gC = gN
+    let bC = bN
+
+    // Only attenuate Green in the warm yellow/amber/chartreuse zone (Hue 20 to 85 deg)
+    // where the Green LED diode physically overpowers Red to look lime-green.
+    if (hsv.h >= 20 && hsv.h <= 85) {
+      const dist = Math.abs(hsv.h - 55) / 35.0 // 0 at pure yellow (55 deg), 1 at edges
+      const gFactor = 0.70 + 0.25 * dist // 0.70 at yellow, 0.95 at edges
+      gC = gN * gFactor
+    }
 
     const maxC = Math.max(rC, gC, bC)
     const maxN = Math.max(rN, gN, bN)
