@@ -51,7 +51,7 @@ export const enum WikariState {
  */
 export class Bulb {
 	static readonly stateEmitter = new EventEmitter();
-	static client = dgram.createSocket("udp4");
+	static client = dgram.createSocket({ type: "udp4", reuseAddr: true });
 
 	private static _state = WikariState.IDLE;
 	static get state() {
@@ -82,7 +82,7 @@ export class Bulb {
 
 		if (Bulb.state == WikariState.IDLE || Bulb.state == WikariState.CLOSED) {
 			try {
-				Bulb.client = dgram.createSocket("udp4");
+				Bulb.client = dgram.createSocket({ type: "udp4", reuseAddr: true });
 			} catch {}
 			this.initClient();
 		}

@@ -334,14 +334,14 @@ class BulbManager {
     }
 
     for (const prefix of prefixes) {
-      // Proactively probe common DHCP lease IPs
-      for (let i = 2; i <= 35; i++) {
+      // Proactively probe common DHCP lease IPs across extended range
+      for (let i = 2; i <= 60; i++) {
         extraTargets.push(`${prefix}${i}`)
       }
     }
 
     try {
-      return await discover({ waitMs: 2200, extraTargets })
+      return await discover({ waitMs: 2500, extraTargets })
     } catch {
       return []
     }
@@ -513,6 +513,25 @@ class BulbManager {
       const state = await this.setUpSingleBulb(bulb, ip)
       this.bulbs.set(ip, bulb)
       this.bulbStates.set(ip, state)
+
+      // Register PC with bulb so bulb pushes syncPilot packets every 5s (keeps ARP & connection warm)
+      bulb.subscribe().catch((err) => {
+        log.warn(`Could not subscribe to bulb at ${ip}:`, err)
+      })
+
+      bulb.onSync((msg) => {
+        if (msg && msg.params) {
+          const currentState = this.bulbStates.get(ip)
+          if (currentState) {
+            currentState.state = msg.params.state ?? currentState.state
+            currentState.dimming = msg.params.dimming ?? currentState.dimming
+            currentState.sceneId = msg.params.sceneId ?? currentState.sceneId
+            currentState.rssi = msg.params.rssi ?? currentState.rssi
+            currentState.connectionStatus = 'connected'
+            this.sendStateToRenderer()
+          }
+        }
+      })
 
       const active = this.activeBulbIp ? this.bulbStates.get(this.activeBulbIp) : null
       if (!this.activeBulbIp || !active || active.connectionStatus !== 'connected') {

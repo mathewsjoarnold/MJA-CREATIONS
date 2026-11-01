@@ -2,11 +2,12 @@ import dgram from "dgram";
 import { Bulb } from "./bulb";
 import { DEFAULT_DISCOVER_WAIT_MS, WIZ_BULB_LISTEN_PORT } from "./constants";
 import { checkType } from "./type-checker";
-import { GetPilotMsg, getPilotResponseTemplate } from "./types";
-import { getBroadcastAddresses } from "./utils";
+import { getPilotResponseTemplate } from "./types";
+import { getBroadcastAddresses, getRandomMac, ipAddress } from "./utils";
 
 /**
- * Discovers bulbs on a network using high-resilience UDP multi-bursting.
+ * Discovers WiZ bulbs on a local network using high-resilience UDP dual-payload multi-bursting.
+ * Sends both standard registration broadcast pairing frames and getPilot status queries.
  */
 export async function discover({
 	addr,
@@ -19,12 +20,10 @@ export async function discover({
 	waitMs?: number;
 	extraTargets?: string[];
 } = {}): Promise<Bulb[]> {
-	const client = dgram.createSocket("udp4");
+	const client = dgram.createSocket({ type: "udp4", reuseAddr: true });
 	const bulbs: Bulb[] = [];
-	const message: GetPilotMsg = {
-		method: "getPilot",
-		params: {},
-	};
+	const localIp = ipAddress() || "192.168.20.4";
+	const phoneMac = getRandomMac();
 
 	const targets: string[] = [];
 	if (addr) {
@@ -65,9 +64,25 @@ export async function discover({
 
 		const sendProbe = () => {
 			if (isDone) return;
+			// 1. WiZ discovery broadcast packet (registration)
+			const regPayload = JSON.stringify({
+				method: "registration",
+				params: {
+					phoneMac,
+					register: true,
+					phoneIp: localIp,
+				},
+			});
+			// 2. WiZ direct pilot packet (getPilot)
+			const pilotPayload = JSON.stringify({
+				method: "getPilot",
+				params: {},
+			});
+
 			for (const target of targets) {
 				try {
-					client.send(JSON.stringify(message), port, target);
+					client.send(regPayload, port, target);
+					client.send(pilotPayload, port, target);
 				} catch {}
 			}
 		};
@@ -75,11 +90,16 @@ export async function discover({
 		const listener = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
 			try {
 				const response = JSON.parse(msg.toString());
-				if (checkType(getPilotResponseTemplate, response)) {
+				// Check for ANY valid WiZ protocol response
+				const isWizResponse =
+					(response && response.result && (response.result.mac !== undefined || response.result.state !== undefined || response.result.success !== undefined)) ||
+					(response && response.method && ["getPilot", "registration", "getSystemConfig", "syncPilot"].includes(response.method)) ||
+					checkType(getPilotResponseTemplate, response);
+
+				if (isWizResponse) {
 					if (!bulbs.some((b) => b.address === rinfo.address)) {
-						const mac = response?.result?.mac || undefined;
+						const mac = response?.result?.mac || response?.params?.mac || undefined;
 						bulbs.push(new Bulb(rinfo.address, { port, macIdentifier: mac }));
-						// When probing a specific IP, resolve early as soon as it responds
 						if (addr && rinfo.address === addr) {
 							cleanup();
 						}
