@@ -29,6 +29,7 @@ export interface VisualizerState {
   currentDimming: number
   frequencyData: Uint8Array
   screenColor?: { r: number; g: number; b: number }
+  isDarkScreen?: boolean
 }
 
 export interface PaletteInfo {
@@ -263,13 +264,16 @@ export class MusicSyncEngine {
   private currentHsv = { h: 280, s: 1, v: 0.5 }
   private currentDimming: number = 50
 
-  // Screen Ambilight state
+  // Screen Ambilight state & dark screen ambient gradient
   private screenStream: MediaStream | null = null
   private screenVideo: HTMLVideoElement | null = null
   private screenCanvas: HTMLCanvasElement | null = null
   private screenCtx: CanvasRenderingContext2D | null = null
-  private lastScreenRgb: { r: number; g: number; b: number } = { r: 55, g: 114, b: 255 }
-  private lastScreenHsv: { h: number; s: number; v: number } = { h: 220, s: 0.8, v: 0.9 }
+  private lastScreenRgb: { r: number; g: number; b: number } = { r: 255, g: 190, b: 100 }
+  private lastScreenHsv: { h: number; s: number; v: number } = { h: 35, s: 0.6, v: 0.9 }
+  private isDarkScreen: boolean = false
+  private darkBlendAmount: number = 0
+  private darkGradientHue: number = 0
 
   // WiZ packet throttling & deadband
   private lastSent = { r: -1, g: -1, b: -1, dimming: -1 }
@@ -402,53 +406,66 @@ export class MusicSyncEngine {
     this.screenCtx = null
   }
 
-  private extractScreenColor(): { r: number; g: number; b: number } {
+  private extractScreenColor(): { r: number; g: number; b: number; isDark: boolean } {
     if (!this.screenVideo || !this.screenCtx || !this.screenCanvas) {
-      return this.lastScreenRgb
+      return { ...this.lastScreenRgb, isDark: this.isDarkScreen }
     }
 
     if (this.screenVideo.readyState < 2) {
-      return this.lastScreenRgb
+      return { ...this.lastScreenRgb, isDark: this.isDarkScreen }
     }
 
     try {
       this.screenCtx.drawImage(this.screenVideo, 0, 0, 32, 32)
       const imgData = this.screenCtx.getImageData(0, 0, 32, 32).data
 
-      // 24 hue bins (15 deg each)
-      const numBins = 24
-      const bucketWeights = new Float32Array(numBins)
-      const bucketR = new Float32Array(numBins)
-      const bucketG = new Float32Array(numBins)
-      const bucketB = new Float32Array(numBins)
+      let totalLum = 0
+      let maxLum = 0
+      let activePixels = 0
 
-      let fallbackR = 0
-      let fallbackG = 0
-      let fallbackB = 0
-      let fallbackCount = 0
+      // 12 broad hue bins (30 deg each) for robust dominant color clustering
+      const numBins = 12
+      const binWeights = new Float32Array(numBins)
+      const binR = new Float32Array(numBins)
+      const binG = new Float32Array(numBins)
+      const binB = new Float32Array(numBins)
+
+      let totalWeight = 0
+      let weightedR = 0
+      let weightedG = 0
+      let weightedB = 0
 
       for (let i = 0; i < imgData.length; i += 4) {
         const r = imgData[i]
         const g = imgData[i + 1]
         const b = imgData[i + 2]
 
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b
+        totalLum += lum
+        if (lum > maxLum) maxLum = lum
+
         const max = Math.max(r, g, b)
         const min = Math.min(r, g, b)
         const diff = max - min
 
-        if (max > 25) {
-          fallbackR += r
-          fallbackG += g
-          fallbackB += b
-          fallbackCount++
-        }
-
-        // Skip dark/black pixels (letterbox, dark scenes)
-        if (max < 35) continue
+        // Ignore letterbox black bars and dark background noise
+        if (max < 30) continue
 
         const sat = max === 0 ? 0 : diff / max
-        // Skip washed out pure whites/light greys
-        if (sat < 0.14 && max > 210) continue
+
+        // Ignore washed out white highlights / glare
+        if (sat < 0.10 && max > 225) continue
+
+        activePixels++
+
+        // Balanced perceptual weight:
+        // Prioritizes vibrant colors without crushing natural skin tones, tans, blonde hair, and browns
+        const weight = (0.35 + 0.65 * sat) * Math.pow(lum / 255, 0.8)
+
+        totalWeight += weight
+        weightedR += r * weight
+        weightedG += g * weight
+        weightedB += b * weight
 
         let hue = 0
         if (diff !== 0) {
@@ -459,43 +476,63 @@ export class MusicSyncEngine {
           if (hue < 0) hue += 360
         }
 
-        const weight = Math.pow(sat, 1.4) * (max / 255)
-        const bin = Math.min(numBins - 1, Math.floor(hue / 15))
-
-        bucketWeights[bin] += weight
-        bucketR[bin] += r * weight
-        bucketG[bin] += g * weight
-        bucketB[bin] += b * weight
+        const bin = Math.min(numBins - 1, Math.floor(hue / 30))
+        binWeights[bin] += weight
+        binR[bin] += r * weight
+        binG[bin] += g * weight
+        binB[bin] += b * weight
       }
 
-      let bestBin = -1
-      let maxScore = 0
-      for (let b = 0; b < numBins; b++) {
-        if (bucketWeights[b] > maxScore) {
-          maxScore = bucketWeights[b]
-          bestBin = b
-        }
-      }
+      const avgLum = totalLum / 1024
+      // Detect black or dark scenes (e.g. night scenes, transitions, or black screens)
+      const isDark = activePixels < 25 || avgLum < 22 || maxLum < 38
+      this.isDarkScreen = isDark
 
       let targetR: number
       let targetG: number
       let targetB: number
 
-      if (bestBin !== -1 && maxScore > 0.4) {
-        targetR = Math.round(bucketR[bestBin] / bucketWeights[bestBin])
-        targetG = Math.round(bucketG[bestBin] / bucketWeights[bestBin])
-        targetB = Math.round(bucketB[bestBin] / bucketWeights[bestBin])
-      } else if (fallbackCount > 0) {
-        targetR = Math.round(fallbackR / fallbackCount)
-        targetG = Math.round(fallbackG / fallbackCount)
-        targetB = Math.round(fallbackB / fallbackCount)
+      if (isDark) {
+        // Slow Moving Gradient Effect for Black / Dark Screen:
+        // Gently advance hue across a soothing ambient spectrum (~4.5 deg/sec at 13 Hz)
+        this.darkGradientHue = (this.darkGradientHue + 0.35) % 360
+        this.darkBlendAmount = Math.min(1.0, this.darkBlendAmount + 0.05)
+
+        // Soft, relaxing atmospheric ambient color (cozy pastel/aurora)
+        const gradRgb = hsvToRgb(this.darkGradientHue, 0.72, 0.40)
+        targetR = gradRgb.r
+        targetG = gradRgb.g
+        targetB = gradRgb.b
       } else {
-        targetR = this.lastScreenRgb.r
-        targetG = this.lastScreenRgb.g
-        targetB = this.lastScreenRgb.b
+        // Bright active screen: smoothly return to live screen color
+        this.darkBlendAmount = Math.max(0.0, this.darkBlendAmount - 0.08)
+
+        let bestBin = -1
+        let maxWeight = 0
+        for (let b = 0; b < numBins; b++) {
+          if (binWeights[b] > maxWeight) {
+            maxWeight = binWeights[b]
+            bestBin = b
+          }
+        }
+
+        if (bestBin !== -1 && maxWeight > 0.3) {
+          targetR = Math.round(binR[bestBin] / binWeights[bestBin])
+          targetG = Math.round(binG[bestBin] / binWeights[bestBin])
+          targetB = Math.round(binB[bestBin] / binWeights[bestBin])
+        } else if (totalWeight > 0) {
+          targetR = Math.round(weightedR / totalWeight)
+          targetG = Math.round(weightedG / totalWeight)
+          targetB = Math.round(weightedB / totalWeight)
+        } else {
+          targetR = this.lastScreenRgb.r
+          targetG = this.lastScreenRgb.g
+          targetB = this.lastScreenRgb.b
+        }
       }
 
-      const smooth = 0.25
+      // Smooth color transitions in RGB space (prevents circular hue jumping through green)
+      const smooth = isDark ? 0.08 : 0.22
       this.lastScreenRgb = {
         r: Math.round(this.lastScreenRgb.r * (1 - smooth) + targetR * smooth),
         g: Math.round(this.lastScreenRgb.g * (1 - smooth) + targetG * smooth),
@@ -503,9 +540,9 @@ export class MusicSyncEngine {
       }
 
       this.lastScreenHsv = rgbToHsv(this.lastScreenRgb.r, this.lastScreenRgb.g, this.lastScreenRgb.b)
-      return this.lastScreenRgb
+      return { ...this.lastScreenRgb, isDark }
     } catch {
-      return this.lastScreenRgb
+      return { ...this.lastScreenRgb, isDark: false }
     }
   }
 
@@ -819,7 +856,8 @@ export class MusicSyncEngine {
 
     // Deliver visualizer update to UI
     if (this.onFrameCallback) {
-      const rgb = hsvToRgb(this.currentHsv.h, this.currentHsv.s, this.currentHsv.v)
+      const rawRgb = hsvToRgb(this.currentHsv.h, this.currentHsv.s, this.currentHsv.v)
+      const calRgb = MusicSyncEngine.calibrateForLed(rawRgb.r, rawRgb.g, rawRgb.b)
       this.onFrameCallback({
         bass: normBass,
         mids: normMid,
@@ -827,12 +865,13 @@ export class MusicSyncEngine {
         overallEnergy: normOverall,
         isBeat,
         beatPulse: this.beatPulse,
-        currentR: rgb.r,
-        currentG: rgb.g,
-        currentB: rgb.b,
+        currentR: calRgb.r,
+        currentG: calRgb.g,
+        currentB: calRgb.b,
         currentDimming: this.currentDimming,
         frequencyData: this.freqData,
-        screenColor: this.config.mode === 'screen' ? this.lastScreenRgb : undefined
+        screenColor: this.config.mode === 'screen' ? calRgb : undefined,
+        isDarkScreen: this.isDarkScreen
       })
     }
   }
@@ -939,11 +978,19 @@ export class MusicSyncEngine {
       }
 
       case 'screen': {
-        this.extractScreenColor()
+        const { isDark } = this.extractScreenColor()
         const hue = this.lastScreenHsv.h
-        const saturation = Math.min(1, Math.max(0.65, this.lastScreenHsv.s * 1.2))
-        // Audio analyzer drives dynamic brightness value
-        const value = Math.max(0.12, energy * 0.85 + this.beatPulse * 0.35)
+        // Natural saturation (no artificially forced high floor):
+        const saturation = isDark ? 0.72 : Math.min(1.0, Math.max(0.35, this.lastScreenHsv.s * 1.05))
+
+        // In dark mode: cozy relaxing brightness (25-35%); In active mode: audio-reactive energy
+        let value: number
+        if (isDark) {
+          value = Math.max(0.18, 0.28 + energy * 0.15)
+        } else {
+          value = Math.max(0.15, energy * 0.85 + this.beatPulse * 0.35)
+        }
+
         return {
           h: hue,
           s: saturation,
@@ -953,12 +1000,40 @@ export class MusicSyncEngine {
     }
   }
 
+  // --- Smart LED Hardware Calibration ---
+  public static calibrateForLed(r: number, g: number, b: number): { r: number; g: number; b: number } {
+    const rN = Math.max(0, Math.min(255, r)) / 255.0
+    const gN = Math.max(0, Math.min(255, g)) / 255.0
+    const bN = Math.max(0, Math.min(255, b)) / 255.0
+
+    // WiZ Smart LED diode compensation:
+    // Green LED diodes have ~2.5x the luminous efficacy of Red/Blue diodes to human vision.
+    // Attenuate Green (0.74) and apply gamma curve (1.7 for Red, 1.9 for Green, 1.7 for Blue).
+    const rC = Math.pow(rN, 1.7) * 1.0
+    const gC = Math.pow(gN, 1.9) * 0.74
+    const bC = Math.pow(bN, 1.7) * 0.88
+
+    const maxC = Math.max(rC, gC, bC)
+    const maxN = Math.max(rN, gN, bN)
+
+    if (maxC > 0 && maxN > 0) {
+      const scale = maxN / maxC
+      return {
+        r: Math.min(255, Math.max(0, Math.round(rC * scale * 255))),
+        g: Math.min(255, Math.max(0, Math.round(gC * scale * 255))),
+        b: Math.min(255, Math.max(0, Math.round(bC * scale * 255)))
+      }
+    }
+    return { r: 0, g: 0, b: 0 }
+  }
+
   // --- UDP Transmission to WiZ Bulbs ---
 
   private sendLightUpdate() {
     // Ensure fresh DSP frame calculation prior to sending
     this.processAudioFrame()
-    const rgb = hsvToRgb(this.currentHsv.h, this.currentHsv.s, this.currentHsv.v)
+    const rawRgb = hsvToRgb(this.currentHsv.h, this.currentHsv.s, this.currentHsv.v)
+    const rgb = MusicSyncEngine.calibrateForLed(rawRgb.r, rawRgb.g, rawRgb.b)
     const dimming = this.currentDimming
 
     // Dead-band check: skip sending if change is negligible
