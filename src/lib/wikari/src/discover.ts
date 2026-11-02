@@ -7,7 +7,7 @@ import { getBroadcastAddresses, getRandomMac, ipAddress } from "./utils";
 
 /**
  * Discovers WiZ bulbs on a local network using high-resilience UDP dual-payload multi-bursting.
- * Sends both standard registration broadcast pairing frames and getPilot status queries.
+ * Spaced packet bursts penetrate 802.11 DTIM power-save sleep on weak RF links.
  */
 export async function discover({
 	addr,
@@ -20,6 +20,7 @@ export async function discover({
 	waitMs?: number;
 	extraTargets?: string[];
 } = {}): Promise<Bulb[]> {
+	const effectiveWaitMs = Math.max(waitMs, 2200);
 	const client = dgram.createSocket({ type: "udp4", reuseAddr: true });
 	const bulbs: Bulb[] = [];
 	const localIp = ipAddress() || "192.168.20.4";
@@ -45,16 +46,12 @@ export async function discover({
 
 	return new Promise<Bulb[]>((resolve) => {
 		let isDone = false;
-		let timeoutId: NodeJS.Timeout | null = null;
-		let burst1: NodeJS.Timeout | null = null;
-		let burst2: NodeJS.Timeout | null = null;
+		const timers: NodeJS.Timeout[] = [];
 
 		const cleanup = () => {
 			if (isDone) return;
 			isDone = true;
-			if (timeoutId) clearTimeout(timeoutId);
-			if (burst1) clearTimeout(burst1);
-			if (burst2) clearTimeout(burst2);
+			timers.forEach((t) => clearTimeout(t));
 			try {
 				client.off("message", listener);
 				client.close();
@@ -64,7 +61,6 @@ export async function discover({
 
 		const sendProbe = () => {
 			if (isDone) return;
-			// 1. WiZ discovery broadcast packet (registration)
 			const regPayload = JSON.stringify({
 				method: "registration",
 				params: {
@@ -73,16 +69,28 @@ export async function discover({
 					phoneIp: localIp,
 				},
 			});
-			// 2. WiZ direct pilot packet (getPilot)
 			const pilotPayload = JSON.stringify({
 				method: "getPilot",
 				params: {},
 			});
 
-			for (const target of targets) {
+			for (let i = 0; i < targets.length; i++) {
+				const target = targets[i];
 				try {
-					client.send(regPayload, port, target);
+					// Prioritize getPilot (instant status query)
 					client.send(pilotPayload, port, target);
+					// Send registration slightly delayed for unicast to prevent packet collision on ESP32
+					if (targets.length === 1) {
+						timers.push(
+							setTimeout(() => {
+								if (!isDone) {
+									try { client.send(regPayload, port, target); } catch {}
+								}
+							}, 40)
+						);
+					} else {
+						client.send(regPayload, port, target);
+					}
 				} catch {}
 			}
 		};
@@ -90,7 +98,6 @@ export async function discover({
 		const listener = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
 			try {
 				const response = JSON.parse(msg.toString());
-				// Check for ANY valid WiZ protocol response
 				const isWizResponse =
 					(response && response.result && (response.result.mac !== undefined || response.result.state !== undefined || response.result.success !== undefined)) ||
 					(response && response.method && ["getPilot", "registration", "getSystemConfig", "syncPilot"].includes(response.method)) ||
@@ -122,13 +129,16 @@ export async function discover({
 
 		client.bind(() => {
 			sendProbe();
-			// Multi-packet bursts defeat 2.4 GHz packet drop
-			burst1 = setTimeout(sendProbe, 120);
-			burst2 = setTimeout(sendProbe, 260);
+			// Multi-packet bursts spaced to penetrate 802.11 DTIM power-save sleep
+			timers.push(setTimeout(sendProbe, 300));
+			timers.push(setTimeout(sendProbe, 750));
+			timers.push(setTimeout(sendProbe, 1400));
 		});
 
-		timeoutId = setTimeout(() => {
-			cleanup();
-		}, waitMs);
+		timers.push(
+			setTimeout(() => {
+				cleanup();
+			}, effectiveWaitMs)
+		);
 	});
 }

@@ -367,9 +367,35 @@ export class Bulb {
 	// ######################################
 	//   Lower-level interaction functions
 	// ######################################
+	async ensureReady(): Promise<void> {
+		if (Bulb.state === WikariState.READY) return;
+		if (Bulb.state === WikariState.CLOSED || Bulb.state === WikariState.IDLE) {
+			try {
+				Bulb.client = dgram.createSocket({ type: "udp4", reuseAddr: true });
+			} catch {}
+			await this.initClient().catch(() => {});
+			return;
+		}
+		if (Bulb.state === WikariState.BINDING) {
+			await new Promise<void>((resolve) => {
+				const check = () => {
+					if (Bulb.state === WikariState.READY) {
+						resolve();
+					} else {
+						Bulb.stateEmitter.once("state-change", check);
+					}
+				};
+				check();
+				setTimeout(resolve, 1000);
+			});
+		}
+	}
+
 	private isReadyToSend(
 		_waitForResponse: boolean,
 	): WikariError<WikariErrorCode.InvalidBulbState> | undefined {
+		if (Bulb.state === WikariState.READY) return undefined;
+
 		const getError = (msg: string) => {
 			return new WikariError(
 				WikariErrorCode.InvalidBulbState,
@@ -464,11 +490,11 @@ export class Bulb {
 			};
 
 			doSend();
-			retry1 = setTimeout(doSend, 200);
-			retry2 = setTimeout(doSend, 500);
+			retry1 = setTimeout(doSend, 280);
+			retry2 = setTimeout(doSend, 700);
 
 			const getResponseTimeout = () =>
-				this.responseTimeout ?? DEFAULT_RESPONSE_WAIT_MS;
+				this.responseTimeout ?? Math.max(DEFAULT_RESPONSE_WAIT_MS, 2500);
 
 			timer = setTimeout(() => {
 				cleanup();
@@ -523,6 +549,7 @@ export class Bulb {
 		message: Message,
 		waitForResponse = true,
 	): Promise<GenericResponse> {
+		await this.ensureReady();
 		const error = this.isReadyToSend(waitForResponse);
 		if (error) throw error;
 

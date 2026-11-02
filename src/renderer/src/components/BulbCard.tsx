@@ -40,16 +40,22 @@ export default function BulbCard({
           ? 'shadow-[0_0_16px_rgba(55,114,255,0.45)] ring-2 ring-primary/80 brightness-105'
           : 'opacity-85 hover:opacity-100 hover:shadow-md'
       } ${isMenuOpen ? 'z-50' : 'z-auto'} ${
-        isConnecting ? 'ring-1 ring-blue-500/40 bg-gradient-to-br from-secondary via-secondary to-blue-950/20' : ''
+        isConnecting ? 'ring-1 ring-blue-500/40 bg-gradient-to-br from-secondary via-secondary to-blue-950/20' : isOffline ? 'ring-1 ring-amber-500/30 bg-gradient-to-br from-secondary via-secondary to-amber-950/20' : ''
       }`}
       variant={bulb.state && isConnected ? 'primary' : 'secondary'}
       active={isActive}
       onClick={onSelect}
     >
-      {/* Top animated glowing shimmer bar when connecting */}
-      {isConnecting && (
+      {/* Top animated glowing shimmer bar when connecting or auto-reconnecting */}
+      {(isConnecting || isOffline) && (
         <div className="absolute top-0 left-0 right-0 h-1 overflow-hidden rounded-t-md bg-neutral-800/60">
-          <div className="w-full h-full bg-gradient-to-r from-blue-500 via-cyan-400 to-indigo-500 animate-shimmer-sweep" />
+          <div
+            className={`w-full h-full ${
+              isConnecting
+                ? 'bg-gradient-to-r from-blue-500 via-cyan-400 to-indigo-500 animate-shimmer-sweep'
+                : 'bg-gradient-to-r from-amber-500 via-orange-400 to-amber-500 animate-shimmer-sweep'
+            }`}
+          />
         </div>
       )}
 
@@ -89,13 +95,13 @@ export default function BulbCard({
           {isOffline && (
             <span
               className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
-              title="Bulb is offline. App is continuously auto-reconnecting in the background."
+              title="Bulb is offline. Relentless background auto-reconnector is actively probing."
             >
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
               </span>
-              <span>Auto-Reconnecting</span>
+              <span>Reconnecting...</span>
             </span>
           )}
 
@@ -120,7 +126,10 @@ export default function BulbCard({
             <span className="text-[10px] text-blue-400/90 animate-pulse font-medium">Syncing...</span>
           )}
           {isOffline && (
-            <span className="text-[10px] text-amber-400/90 animate-pulse font-medium">Waiting for Wi-Fi...</span>
+            <span className="text-[10px] text-amber-400/90 font-medium flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping inline-block" />
+              <span className="animate-pulse">Active Reconnect Loop</span>
+            </span>
           )}
         </div>
       </div>
@@ -139,11 +148,11 @@ export default function BulbCard({
               e.stopPropagation()
               onReconnect?.()
             }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-white/10 hover:bg-white/20 active:scale-95 text-neutral-200 border border-white/10 transition-all cursor-pointer shadow-sm"
-            title="Retry connecting to this bulb now"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-200 border border-amber-500/30 transition-all cursor-pointer shadow-sm"
+            title="Hammer direct connection to this bulb immediately"
           >
-            <LuRefreshCw size={12} className="text-amber-400" />
-            <span>Retry Now</span>
+            <LuRefreshCw size={12} className="text-amber-400 animate-spin" />
+            <span>Force Reconnect</span>
           </button>
         ) : (
           <PowerButton isOn={bulb.state} onToggle={onToggle} />

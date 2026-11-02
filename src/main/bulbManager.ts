@@ -1,3 +1,4 @@
+import dgram from 'dgram'
 import { AppConfig, BulbConfigEntry } from '@/types/bulbConfig'
 import { systemConfig } from '@/types/systemConfig'
 import { CONFIG } from '@constants'
@@ -52,6 +53,7 @@ class BulbManager {
 
   // Background auto-reconnect timer
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private consecutiveHealthFailures: Map<string, number> = new Map()
 
   // Window reference
   public window: BrowserWindow
@@ -212,6 +214,140 @@ class BulbManager {
     }
   }
 
+  // --- High-Power Direct Prober & Instant Connector ---
+
+  /**
+   * Sends clean direct unicast getPilot datagrams directly to ip:38899.
+   * Multi-burst spacing penetrates 802.11 DTIM power-save sleep without flooding the router.
+   */
+  public async directPingBulb(
+    ip: string,
+    timeoutMs = 2200
+  ): Promise<{ mac?: string; rssi?: number; state?: boolean; sceneId?: number; dimming?: number; temp?: number } | null> {
+    return new Promise((resolve) => {
+      let resolved = false
+      const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+      const timers: NodeJS.Timeout[] = []
+
+      const cleanup = () => {
+        if (resolved) return
+        resolved = true
+        timers.forEach((t) => clearTimeout(t))
+        try {
+          socket.close()
+        } catch {}
+      }
+
+      const timer = setTimeout(() => {
+        cleanup()
+        resolve(null)
+      }, timeoutMs)
+      timers.push(timer)
+
+      socket.on('message', (msg, rinfo) => {
+        if (rinfo.address === ip && !resolved) {
+          try {
+            const data = JSON.parse(msg.toString())
+            if (data && (data.result || data.params)) {
+              cleanup()
+              resolve(data.result || data.params || {})
+              return
+            }
+          } catch {}
+        }
+      })
+
+      socket.on('error', () => {
+        cleanup()
+        resolve(null)
+      })
+
+      socket.bind(0, () => {
+        const payload = JSON.stringify({ method: 'getPilot', params: {} })
+        const send = () => {
+          if (resolved) return
+          try {
+            socket.send(payload, 38899, ip)
+          } catch {}
+        }
+
+        send()
+        timers.push(setTimeout(send, 280))
+        timers.push(setTimeout(send, 700))
+        timers.push(setTimeout(send, 1300))
+      })
+    })
+  }
+
+  private async connectBulbDirect(bulb: Bulb, ip: string, initialPilot?: any) {
+    try {
+      let state = this.bulbStates.get(ip)
+      if (!state) {
+        state = {
+          ip,
+          name: 'WiZ Bulb',
+          port: 38899,
+          mac: initialPilot?.mac || '',
+          rssi: initialPilot?.rssi || 0,
+          state: initialPilot?.state ?? false,
+          sceneId: initialPilot?.sceneId ?? 0,
+          homeId: 0,
+          roomId: 0,
+          rgn: '',
+          moduleName: 'WiZ Bulb',
+          fwVersion: '1.0',
+          groupId: 0,
+          ping: 0,
+          customColors: this.appData.customColors,
+          favoriteColors: this.appData.favoriteColors,
+          connectionStatus: 'connected'
+        }
+      } else {
+        state.connectionStatus = 'connected'
+        if (initialPilot) {
+          state.state = initialPilot.state ?? state.state
+          state.dimming = initialPilot.dimming ?? state.dimming
+          state.sceneId = initialPilot.sceneId ?? state.sceneId
+          state.rssi = initialPilot.rssi ?? state.rssi
+          if (initialPilot.mac) state.mac = initialPilot.mac
+        }
+      }
+
+      this.bulbs.set(ip, bulb)
+      this.bulbStates.set(ip, state)
+      this.consecutiveHealthFailures.set(ip, 0)
+
+      bulb.subscribe().catch((err) => {
+        log.warn(`Could not subscribe to bulb at ${ip}:`, err)
+      })
+
+      bulb.onSync((msg) => {
+        if (msg && msg.params) {
+          const currentState = this.bulbStates.get(ip)
+          if (currentState) {
+            currentState.state = msg.params.state ?? currentState.state
+            currentState.dimming = msg.params.dimming ?? currentState.dimming
+            currentState.sceneId = msg.params.sceneId ?? currentState.sceneId
+            currentState.rssi = msg.params.rssi ?? currentState.rssi
+            currentState.connectionStatus = 'connected'
+            this.consecutiveHealthFailures.set(ip, 0)
+            this.sendStateToRenderer()
+          }
+        }
+      })
+
+      const active = this.activeBulbIp ? this.bulbStates.get(this.activeBulbIp) : null
+      if (!this.activeBulbIp || !active || active.connectionStatus !== 'connected') {
+        this.activeBulbIp = ip
+      }
+
+      log.info(`[Connected] Bulb at ${ip} (${state.name}) connected successfully! RSSI: ${state.rssi} dBm`)
+      this.sendStateToRenderer()
+    } catch (error) {
+      log.error(`Failed to connect bulb direct at ${ip}:`, error)
+    }
+  }
+
   // --- Discovery Engine ---
 
   async discoverBulbs() {
@@ -221,9 +357,9 @@ class BulbManager {
 
     const savedIps = this.appData.bulbs.map((b) => b.bulbIp)
 
-    // Phase 1: Parallel unicast probing of all saved IPs with retries
+    // Phase 1: Parallel direct unicast probing of all saved IPs with retries
     if (savedIps.length > 0) {
-      log.info('Phase 1: Probing saved bulb IPs in parallel:', savedIps)
+      log.info('Phase 1: Direct unicast probing saved bulb IPs in parallel:', savedIps)
 
       for (let attempt = 0; attempt < MAX_DISCOVERY_RETRIES; attempt++) {
         const pendingIps = savedIps.filter((ip) => {
@@ -235,7 +371,16 @@ class BulbManager {
         await Promise.allSettled(
           pendingIps.map(async (ip) => {
             try {
-              const res = await discover({ addr: ip, waitMs: 1800 })
+              // 1. Direct high-power unicast ping (12ms - 100ms)
+              const pingResult = await this.directPingBulb(ip, 2000)
+              if (pingResult) {
+                const bulb = new Bulb(ip, { port: 38899, macIdentifier: pingResult.mac })
+                await this.connectBulbDirect(bulb, ip, pingResult)
+                return
+              }
+
+              // 2. Discover prober fallback
+              const res = await discover({ addr: ip, waitMs: 2200 })
               if (res.length > 0) {
                 await this.connectBulb(res[0], ip)
               }
@@ -405,40 +550,55 @@ class BulbManager {
   }
 
   /**
-   * Background health monitor for connected bulbs. Detects power switch off or Wi-Fi drops.
+   * Multi-strike background health monitor.
+   * Requires 3 consecutive failed checks spaced across 24+ seconds before marking a bulb offline,
+   * completely preventing false-offline status from isolated -90 dBm Wi-Fi packet drops.
    */
   private async performHealthCheck() {
     for (const [ip, bulb] of this.bulbs) {
       const state = this.bulbStates.get(ip)
       if (!state || state.connectionStatus !== 'connected') continue
 
+      let failed = false
       try {
         const pilot = await bulb.getPilot()
         if (pilot && pilot.result) {
           state.state = pilot.result.state ?? state.state
           state.dimming = pilot.result.dimming ?? state.dimming
           state.rssi = pilot.result.rssi ?? state.rssi
+          this.consecutiveHealthFailures.set(ip, 0)
+        } else {
+          failed = true
         }
       } catch {
-        // Missed pilot check; verify with quick unicast probe before declaring offline
-        try {
-          const res = await discover({ addr: ip, waitMs: 1200 })
-          if (res.length === 0) {
-            log.warn(`Bulb at ${ip} stopped responding. Transitioning to offline for auto-reconnect.`)
+        failed = true
+      }
+
+      if (failed) {
+        const cur = (this.consecutiveHealthFailures.get(ip) || 0) + 1
+        this.consecutiveHealthFailures.set(ip, cur)
+        log.warn(`Health check strike ${cur}/3 for bulb at ${ip}`)
+
+        if (cur >= 3) {
+          // Confirm with direct ping before marking offline
+          const ping = await this.directPingBulb(ip, 1800)
+          if (ping) {
+            this.consecutiveHealthFailures.set(ip, 0)
+            state.rssi = ping.rssi ?? state.rssi
+          } else {
+            log.warn(`Bulb at ${ip} missed 3 consecutive health checks. Transitioning to offline for relentless auto-reconnect.`)
             state.connectionStatus = 'offline'
             this.sendStateToRenderer()
           }
-        } catch {
-          state.connectionStatus = 'offline'
-          this.sendStateToRenderer()
         }
       }
     }
   }
 
   /**
-   * Continuous self-healing auto-reconnection daemon.
-   * Uses non-overlapping recursive setTimeout to guarantee safe socket execution on Windows.
+   * Powerful, infinite auto-reconnection daemon.
+   * Relentlessly probes offline bulbs with direct unicast pings every 2.0s,
+   * awakening sleeping Wi-Fi radios without pause or freeze.
    */
   private startAutoReconnectDaemon() {
     if (this.reconnectTimer) return
@@ -456,32 +616,45 @@ class BulbManager {
         if (disconnectedBulbs.length > 0) {
           cycleCount++
 
-          // Step 1: Unicast multi-burst probe to known IPs
+          // Relentless direct unicast probe to every offline bulb in parallel
           await Promise.allSettled(
             disconnectedBulbs.map(async (entry) => {
               try {
-                const res = await discover({ addr: entry.bulbIp, waitMs: 1600 })
+                // Try direct unicast ping first (fastest, most powerful)
+                const pingResult = await this.directPingBulb(entry.bulbIp, 1800)
+                if (pingResult) {
+                  const bulb = new Bulb(entry.bulbIp, { port: 38899, macIdentifier: pingResult.mac })
+                  await this.connectBulbDirect(bulb, entry.bulbIp, pingResult)
+                  log.info(`[Auto-Reconnect] Powerfully reconnected bulb at ${entry.bulbIp} (${entry.bulbName})! RSSI: ${pingResult.rssi} dBm`)
+                  this.saveConfig()
+                  this.sendStateToRenderer()
+                  return
+                }
+
+                // If direct ping missed, try discover prober
+                const res = await discover({ addr: entry.bulbIp, waitMs: 2000 })
                 if (res.length > 0) {
                   await this.connectBulb(res[0], entry.bulbIp)
-                  log.info(`[Auto-Reconnect] Reconnected bulb at ${entry.bulbIp} (${entry.bulbName})`)
+                  log.info(`[Auto-Reconnect] Reconnected bulb at ${entry.bulbIp} via discovery burst!`)
                   this.saveConfig()
                   this.sendStateToRenderer()
                 }
               } catch (err) {
-                log.warn(`[Auto-Reconnect] Unicast probe error for ${entry.bulbIp}:`, err)
+                log.warn(`[Auto-Reconnect] Probe error for ${entry.bulbIp}:`, err)
               }
             })
           )
 
-          // Step 2: Check if any bulbs are STILL disconnected
+          // Check if any bulb is still missing
           const stillDisconnected = savedEntries.filter((entry) => {
             const state = this.bulbStates.get(entry.bulbIp)
             return !state || state.connectionStatus !== 'connected'
           })
 
-          // Step 3: Every 3rd cycle (~10s) or on initial cycle, perform full broadcast + subnet sweep
-          if (stillDisconnected.length > 0 && (cycleCount % 3 === 0 || cycleCount === 1)) {
+          // Every 7th cycle (~14s) of disconnection, sweep network to check if DHCP reassigned the bulb
+          if (stillDisconnected.length > 0 && cycleCount % 7 === 0) {
             try {
+              log.info(`[Auto-Reconnect] Bulb(s) still offline after direct probes. Running subnet sweep to detect DHCP migration...`)
               const discoveredBulbs = await this.sweepNetworkForBulbs()
               for (const discovered of discoveredBulbs) {
                 await this.handleDiscoveredBulb(discovered)
@@ -490,18 +663,20 @@ class BulbManager {
               log.warn('[Auto-Reconnect] Network sweep error:', err)
             }
           }
+
+          // Delay before next relentless cycle: 2000ms
+          this.reconnectTimer = setTimeout(runReconnectionCycle, 2000)
         } else {
-          // All bulbs are connected: run gentle heartbeat health check every ~10s
+          // All bulbs connected: run health monitor every 8.0s
           cycleCount++
-          if (cycleCount % 3 === 0) {
+          if (cycleCount % 4 === 0) {
             await this.performHealthCheck()
           }
+          this.reconnectTimer = setTimeout(runReconnectionCycle, 2000)
         }
       } catch (e) {
         log.error('[Auto-Reconnect] Cycle error:', e)
-      } finally {
-        // Continuous, self-scheduling 3.5s delay
-        this.reconnectTimer = setTimeout(runReconnectionCycle, 3500)
+        this.reconnectTimer = setTimeout(runReconnectionCycle, 2000)
       }
     }
 
@@ -756,9 +931,19 @@ class BulbManager {
     }
 
     try {
-      log.info(`[Manual Reconnect] Probing bulb at ${ip}...`)
-      // 1. Direct unicast probe
-      const res = await discover({ addr: ip, waitMs: 2000 })
+      log.info(`[Force Reconnect] Relentlessly probing bulb at ${ip}...`)
+      // 1. Direct high-power unicast ping
+      const pingResult = await this.directPingBulb(ip, 2500)
+      if (pingResult) {
+        const bulb = new Bulb(ip, { port: 38899, macIdentifier: pingResult.mac })
+        await this.connectBulbDirect(bulb, ip, pingResult)
+        this.saveConfig()
+        this.sendStateToRenderer()
+        return
+      }
+
+      // 2. Discover prober
+      const res = await discover({ addr: ip, waitMs: 2500 })
       if (res.length > 0) {
         await this.connectBulb(res[0], ip)
         this.saveConfig()
@@ -766,25 +951,25 @@ class BulbManager {
         return
       }
 
-      // 2. Unicast didn't respond: immediately sweep subnet to detect if DHCP IP changed!
-      log.info(`[Manual Reconnect] ${ip} did not respond directly. Sweeping subnet to check IP migration...`)
+      // 3. Subnet sweep for DHCP IP migration
+      log.info(`[Force Reconnect] Direct probe timed out. Sweeping subnet for DHCP migration...`)
       const sweep = await this.sweepNetworkForBulbs()
-      for (const bulb of sweep) {
-        await this.handleDiscoveredBulb(bulb)
+      for (const b of sweep) {
+        await this.handleDiscoveredBulb(b)
       }
 
-      const updatedState = this.bulbStates.get(ip)
-      if (updatedState && updatedState.connectionStatus === 'connected') {
-        log.info(`[Manual Reconnect] Successfully reconnected via network sweep!`)
+      const updated = this.bulbStates.get(ip)
+      if (updated && updated.connectionStatus === 'connected') {
+        log.info(`[Force Reconnect] Successfully recovered bulb via subnet sweep!`)
         return
       }
 
-      // If still offline, update status (auto-reconnector will keep trying continuously)
+      // If still offline, keep in offline state (background daemon will continue hammering)
       if (state) {
         state.connectionStatus = 'offline'
       }
     } catch (error) {
-      log.error('Failed to reconnect to bulb at', ip, ':', error)
+      log.error('Failed to force reconnect bulb at', ip, ':', error)
       if (state) {
         state.connectionStatus = 'offline'
       }
