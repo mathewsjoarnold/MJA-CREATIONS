@@ -30,7 +30,10 @@ export interface VisualizerState {
   frequencyData: Uint8Array
   screenColor?: { r: number; g: number; b: number }
   isDarkScreen?: boolean
+  isPureBlack?: boolean
+  isDarkGreyScreen?: boolean
   isWhiteOrGrey?: boolean
+  detectedColorMode?: string
   screenTemp?: number
 }
 
@@ -263,7 +266,7 @@ export class MusicSyncEngine {
   private cycleColorIndex: number = 0
 
   // Current interpolated light state
-  private currentHsv = { h: 280, s: 1, v: 0.5 }
+  private currentHsv = { h: 50, s: 0.9, v: 0.6 }
   private currentDimming: number = 50
 
   // Screen Ambilight state & dark/white screen ambient handling
@@ -273,14 +276,19 @@ export class MusicSyncEngine {
   private screenCtx: CanvasRenderingContext2D | null = null
   private lastScreenRgb: { r: number; g: number; b: number } = { r: 255, g: 255, b: 255 }
   private lastScreenHsv: { h: number; s: number; v: number } = { h: 0, s: 0, v: 1.0 }
+  private isPureBlackScreen: boolean = false
   private isDarkScreen: boolean = false
+  private isDarkGreyScreen: boolean = false
   private isWhiteOrGreyScreen: boolean = false
+  private detectedColorMode: string = 'vivid_chroma'
+
   private lastScreenTemp: number = 4800
   private darkBlendAmount: number = 0
   private darkGradientHue: number = 0
 
   // WiZ packet throttling & deadband
   private lastSent = { r: -1, g: -1, b: -1, dimming: -1 }
+  private lastSentState: boolean | null = null
 
   // Callback to feed visualizer UI
   private onFrameCallback: ((state: VisualizerState) => void) | null = null
@@ -414,15 +422,21 @@ export class MusicSyncEngine {
     r: number
     g: number
     b: number
+    isPureBlack: boolean
     isDark: boolean
+    isDarkGrey: boolean
     isWhiteOrGrey: boolean
+    detectedMode: string
     temp: number
   } {
     if (!this.screenVideo || !this.screenCtx || !this.screenCanvas) {
       return {
         ...this.lastScreenRgb,
+        isPureBlack: this.isPureBlackScreen,
         isDark: this.isDarkScreen,
+        isDarkGrey: this.isDarkGreyScreen,
         isWhiteOrGrey: this.isWhiteOrGreyScreen,
+        detectedMode: this.detectedColorMode,
         temp: this.lastScreenTemp
       }
     }
@@ -430,8 +444,11 @@ export class MusicSyncEngine {
     if (this.screenVideo.readyState < 2) {
       return {
         ...this.lastScreenRgb,
+        isPureBlack: this.isPureBlackScreen,
         isDark: this.isDarkScreen,
+        isDarkGrey: this.isDarkGreyScreen,
         isWhiteOrGrey: this.isWhiteOrGreyScreen,
+        detectedMode: this.detectedColorMode,
         temp: this.lastScreenTemp
       }
     }
@@ -448,15 +465,20 @@ export class MusicSyncEngine {
       let neutralG = 0
       let neutralB = 0
 
-      let chromaticCount = 0
       let darkCount = 0
+      let totalChromaWeight = 0
 
-      // 12 broad hue bins (30 deg each) for robust chromatic clustering
-      const numBins = 12
-      const binWeights = new Float32Array(numBins)
-      const binR = new Float32Array(numBins)
-      const binG = new Float32Array(numBins)
-      const binB = new Float32Array(numBins)
+      // Specialized Color Salience Accumulators
+      let brownWeight = 0
+      let orangeWeight = 0
+      let yellowWeight = 0
+
+      // 24 high-resolution 15-degree hue sectors across the spectrum
+      const numSectors = 24
+      const sectorWeights = new Float32Array(numSectors)
+      const sectorR = new Float32Array(numSectors)
+      const sectorG = new Float32Array(numSectors)
+      const sectorB = new Float32Array(numSectors)
 
       for (let i = 0; i < imgData.length; i += 4) {
         const r = imgData[i]
@@ -471,7 +493,7 @@ export class MusicSyncEngine {
         const min = Math.min(r, g, b)
         const diff = max - min
 
-        // Dark/black pixels (letterbox or dark scene)
+        // Dark / black pixels (letterbox or dark scene)
         if (max < 22) {
           darkCount++
           continue
@@ -479,40 +501,79 @@ export class MusicSyncEngine {
 
         const sat = max === 0 ? 0 : diff / max
 
-        // Categorize into Neutral (White/Grey) vs Chromatic (Color)
-        if (sat < 0.18) {
+        // Categorize into Neutral (White/Grey) vs Chromatic
+        if (sat < 0.16) {
           neutralCount++
           neutralR += r
           neutralG += g
           neutralB += b
-        } else {
-          chromaticCount++
-          // Balanced perceptual weight for colors
-          const weight = (0.35 + 0.65 * sat) * Math.pow(lum / 255, 0.8)
-
-          let hue = 0
-          if (diff !== 0) {
-            if (max === r) hue = ((g - b) / diff) % 6
-            else if (max === g) hue = (b - r) / diff + 2
-            else hue = (r - g) / diff + 4
-            hue = Math.round(hue * 60)
-            if (hue < 0) hue += 360
-          }
-
-          const bin = Math.min(numBins - 1, Math.floor(hue / 30))
-          binWeights[bin] += weight
-          binR[bin] += r * weight
-          binG[bin] += g * weight
-          binB[bin] += b * weight
+          continue
         }
+
+        // Perceptual Saliency Weight:
+        // Boosts saturated, vivid features while penalizing dull background noise
+        const salWeight = (0.35 + 0.65 * sat) * Math.pow(lum / 255, 0.65)
+        totalChromaWeight += salWeight
+
+        let hue = 0
+        if (diff !== 0) {
+          if (max === r) hue = ((g - b) / diff) % 6
+          else if (max === g) hue = (b - r) / diff + 2
+          else hue = (r - g) / diff + 4
+          hue = Math.round(hue * 60)
+          if (hue < 0) hue += 360
+        }
+
+        // 1. Brown / Earth-Tone Classifier:
+        // In video/movies: wood, soil, clothing, skin, leaves (warm hue, R>G>B, low-to-mid luminance)
+        const isBrown =
+          hue >= 15 && hue <= 45 && r > g && g > b && b / Math.max(1, r) < 0.60 && lum < 135
+        if (isBrown) {
+          brownWeight += salWeight
+        }
+
+        // 2. Pure Orange Classifier:
+        // Vibrant saturated fire, sunset, orange UI
+        const isOrange = hue >= 20 && hue <= 38 && sat >= 0.42 && (lum >= 85 || r >= 140)
+        if (isOrange) {
+          orangeWeight += salWeight
+        }
+
+        // 3. Yellow Classifier (all shades: mustard, gold, sunshine, lemon, pastel):
+        const isYellow = hue >= 39 && hue <= 68 && sat >= 0.16
+        if (isYellow) {
+          yellowWeight += salWeight
+        }
+
+        const sector = Math.min(numSectors - 1, Math.floor(hue / 15))
+        sectorWeights[sector] += salWeight
+        sectorR[sector] += r * salWeight
+        sectorG[sector] += g * salWeight
+        sectorB[sector] += b * salWeight
       }
 
       const totalPixels = 1024
       const avgLum = totalLum / totalPixels
 
-      // 1. Dark screen detection:
-      // ONLY trigger dark gradient when screen is truly pitch black (credits, black screen, black cutscene)
-      const isDark = darkCount > totalPixels * 0.88 || (avgLum < 14 && maxLum < 26)
+      // 1. Pure Black screen detection (video black transitions, monitor blackout):
+      const isPureBlack =
+        (avgLum < 3.0 && maxLum < 8) ||
+        (darkCount >= totalPixels * 0.98 && maxLum < 10 && avgLum < 3.5)
+      this.isPureBlackScreen = isPureBlack
+
+      // 2. Dark Grey / Stealth Dark Mode detection (e.g. VS Code, dark themes, terminal):
+      // The screen is mostly dark grey / black with low chroma -> bulb should dim very low for dark feel!
+      const isDarkGrey =
+        !isPureBlack &&
+        ((neutralCount >= 750 && avgLum < 90 && totalChromaWeight < 35) ||
+          (darkCount >= 650 && maxLum < 130 && totalChromaWeight < 35))
+      this.isDarkGreyScreen = isDarkGrey
+
+      // 3. Dark screen ambient gradient (e.g. cinema dark scene cut):
+      const isDark =
+        !isPureBlack &&
+        !isDarkGrey &&
+        (darkCount > totalPixels * 0.85 || (avgLum < 16 && maxLum < 32))
       this.isDarkScreen = isDark
 
       let targetR: number
@@ -520,20 +581,31 @@ export class MusicSyncEngine {
       let targetB: number
       let isWhiteOrGrey = false
       let calculatedTemp = 4800
+      let detectedMode = 'vivid_chroma'
 
       if (isDark) {
         // Slow Moving Ambient Gradient on Black/Dark screen:
         this.darkGradientHue = (this.darkGradientHue + 0.35) % 360
         this.darkBlendAmount = Math.min(1.0, this.darkBlendAmount + 0.05)
-
         const gradRgb = hsvToRgb(this.darkGradientHue, 0.72, 0.40)
         targetR = gradRgb.r
         targetG = gradRgb.g
         targetB = gradRgb.b
         this.isWhiteOrGreyScreen = false
-      } else if (neutralCount >= chromaticCount) {
-        // 2. White / Grey majority screen:
-        // When screen is white (webpage, doc, bright sky, white scene) or neutral grey
+        detectedMode = 'ambient_dark'
+      } else if (isDarkGrey) {
+        // Dark Grey / Dark Theme Mode:
+        // Set to cozy, relaxed warm white at low intensity for dark feel
+        isWhiteOrGrey = true
+        this.isWhiteOrGreyScreen = true
+        targetR = 255
+        targetG = 240
+        targetB = 220
+        calculatedTemp = 3000
+        this.lastScreenTemp = 3000
+        detectedMode = 'dark_grey'
+      } else if (neutralCount >= 650 && totalChromaWeight < 25) {
+        // 4. White / Bright Grey majority screen (documents, web pages, daylight scenes):
         isWhiteOrGrey = true
         this.isWhiteOrGreyScreen = true
         this.darkBlendAmount = Math.max(0.0, this.darkBlendAmount - 0.08)
@@ -546,29 +618,74 @@ export class MusicSyncEngine {
         targetG = Math.round(rawAvgG)
         targetB = Math.round(rawAvgB)
 
-        // Calculate color temperature in Kelvin (2700K Warm White to 6500K Cold White)
         const diffRb = Math.abs(rawAvgR - rawAvgB) < 8 ? 0 : rawAvgR - rawAvgB
         calculatedTemp = Math.max(2700, Math.min(6500, Math.round(4800 - diffRb * 25)))
         this.lastScreenTemp = calculatedTemp
+        detectedMode = 'white'
       } else {
-        // 3. Chromatic color majority screen:
+        // 5. Chromatic Color Majority Screen:
         isWhiteOrGrey = false
         this.isWhiteOrGreyScreen = false
         this.darkBlendAmount = Math.max(0.0, this.darkBlendAmount - 0.08)
 
-        let bestBin = -1
-        let maxWeight = 0
-        for (let b = 0; b < numBins; b++) {
-          if (binWeights[b] > maxWeight) {
-            maxWeight = binWeights[b]
-            bestBin = b
+        // Find dominant sector
+        let bestSector = -1
+        let maxSectorWeight = 0
+        for (let s = 0; s < numSectors; s++) {
+          if (sectorWeights[s] > maxSectorWeight) {
+            maxSectorWeight = sectorWeights[s]
+            bestSector = s
           }
         }
 
-        if (bestBin !== -1 && maxWeight > 0.3) {
-          targetR = Math.round(binR[bestBin] / binWeights[bestBin])
-          targetG = Math.round(binG[bestBin] / binWeights[bestBin])
-          targetB = Math.round(binB[bestBin] / binWeights[bestBin])
+        // Subtractive-to-Additive Intelligent Color Remapping:
+        if (
+          brownWeight > orangeWeight &&
+          brownWeight > yellowWeight &&
+          brownWeight >= totalChromaWeight * 0.35
+        ) {
+          // A) BROWN / EARTH-TONES -> REMAP TO WARM GOLDEN YELLOW:
+          // LEDs cannot project "brown". Brown is dark orange/yellow.
+          // Commercial ambilight maps brown to rich, glowing warm golden yellow (#FFB700):
+          const yellowHsv = { h: 50, s: 0.98, v: 1.0 }
+          const yRgb = hsvToRgb(yellowHsv.h, yellowHsv.s, yellowHsv.v)
+          targetR = yRgb.r
+          targetG = yRgb.g
+          targetB = yRgb.b
+          detectedMode = 'brown_to_yellow'
+        } else if (orangeWeight >= yellowWeight && orangeWeight >= maxSectorWeight * 0.75) {
+          // B) ORANGE -> PURE VIBRANT FIERY ORANGE:
+          // Zero green shift, crisp and radiant:
+          const orangeHsv = { h: 28, s: 1.0, v: 1.0 }
+          const oRgb = hsvToRgb(orangeHsv.h, orangeHsv.s, orangeHsv.v)
+          targetR = oRgb.r
+          targetG = oRgb.g
+          targetB = oRgb.b
+          detectedMode = 'pure_orange'
+        } else if (yellowWeight >= maxSectorWeight * 0.75) {
+          // C) SHADES OF YELLOW (MUSTARD, GOLD, SUNSHINE, LEMON, PASTEL) -> TRUE SUNSHINE YELLOW:
+          // Boosted saturation to eliminate lime-green and pale washout:
+          const yellowHsv = { h: 53, s: 1.0, v: 1.0 }
+          const yRgb = hsvToRgb(yellowHsv.h, yellowHsv.s, yellowHsv.v)
+          targetR = yRgb.r
+          targetG = yRgb.g
+          targetB = yRgb.b
+          detectedMode = 'pure_yellow'
+        } else if (bestSector !== -1 && maxSectorWeight > 0.2) {
+          // D) ALL OTHER CHROMATIC COLORS (CYAN, MAGENTA, BLUE, PURPLE, RED, GREEN):
+          const rawR = sectorR[bestSector] / maxSectorWeight
+          const rawG = sectorG[bestSector] / maxSectorWeight
+          const rawB = sectorB[bestSector] / maxSectorWeight
+          const rawHsv = rgbToHsv(rawR, rawG, rawB)
+
+          // Gamut Expansion / Saturation Boost ("get the feeling"):
+          // Makes movie and game colors punchy, deep and rich rather than washed out
+          const boostedSat = Math.min(1.0, Math.max(0.45, rawHsv.s * 1.30 + 0.12))
+          const boostRgb = hsvToRgb(rawHsv.h, boostedSat, 1.0)
+          targetR = boostRgb.r
+          targetG = boostRgb.g
+          targetB = boostRgb.b
+          detectedMode = 'vivid_chroma'
         } else {
           targetR = this.lastScreenRgb.r
           targetG = this.lastScreenRgb.g
@@ -576,26 +693,36 @@ export class MusicSyncEngine {
         }
       }
 
+      this.detectedColorMode = detectedMode
+
       // Smooth color transitions in RGB space (no circular hue jumping)
-      const smooth = isDark ? 0.08 : 0.22
+      const smoothAlpha = isDark
+        ? 0.08
+        : Math.max(0.10, Math.min(0.70, (1 - this.config.smoothing) * 0.75))
       this.lastScreenRgb = {
-        r: Math.round(this.lastScreenRgb.r * (1 - smooth) + targetR * smooth),
-        g: Math.round(this.lastScreenRgb.g * (1 - smooth) + targetG * smooth),
-        b: Math.round(this.lastScreenRgb.b * (1 - smooth) + targetB * smooth)
+        r: Math.round(this.lastScreenRgb.r * (1 - smoothAlpha) + targetR * smoothAlpha),
+        g: Math.round(this.lastScreenRgb.g * (1 - smoothAlpha) + targetG * smoothAlpha),
+        b: Math.round(this.lastScreenRgb.b * (1 - smoothAlpha) + targetB * smoothAlpha)
       }
 
       this.lastScreenHsv = rgbToHsv(this.lastScreenRgb.r, this.lastScreenRgb.g, this.lastScreenRgb.b)
       return {
         ...this.lastScreenRgb,
+        isPureBlack,
         isDark,
+        isDarkGrey,
         isWhiteOrGrey,
+        detectedMode,
         temp: calculatedTemp
       }
     } catch {
       return {
         ...this.lastScreenRgb,
+        isPureBlack: false,
         isDark: false,
+        isDarkGrey: false,
         isWhiteOrGrey: this.isWhiteOrGreyScreen,
+        detectedMode: this.detectedColorMode,
         temp: this.lastScreenTemp
       }
     }
@@ -904,10 +1031,19 @@ export class MusicSyncEngine {
 
     this.currentHsv = lerpHsv(this.currentHsv, target, 1 - effectiveSmooth)
 
-    // Calculate dimming percentage within user configured bounds
+    // Calculate dimming percentage within user configured bounds [minBrightness, maxBrightness]
     const dimRange = this.config.maxBrightness - this.config.minBrightness
-    const targetDim = this.config.minBrightness + dimRange * Math.min(1, target.v + this.beatPulse * 0.25)
-    this.currentDimming = Math.round(this.currentDimming * smoothFactor + targetDim * (1 - smoothFactor))
+    const targetDim = Math.min(
+      this.config.maxBrightness,
+      Math.max(
+        this.config.minBrightness,
+        Math.round(this.config.minBrightness + dimRange * Math.min(1.0, target.v + this.beatPulse * 0.25))
+      )
+    )
+    // Asymmetric dimming smoothing: faster attack on rises/beats to ensure 100% peaks are reached,
+    // silky decay on falls controlled by Color Smoothing slider
+    const dimSmooth = targetDim > this.currentDimming ? smoothFactor * 0.35 : smoothFactor
+    this.currentDimming = Math.round(this.currentDimming * dimSmooth + targetDim * (1 - dimSmooth))
 
     // Deliver visualizer update to UI
     if (this.onFrameCallback) {
@@ -932,8 +1068,11 @@ export class MusicSyncEngine {
         currentDimming: this.currentDimming,
         frequencyData: this.freqData,
         screenColor: this.config.mode === 'screen' ? calRgb : undefined,
+        isPureBlack: this.config.mode === 'screen' ? this.isPureBlackScreen : false,
         isDarkScreen: this.isDarkScreen,
+        isDarkGreyScreen: this.isDarkGreyScreen,
         isWhiteOrGrey: this.isWhiteOrGreyScreen,
+        detectedColorMode: this.detectedColorMode,
         screenTemp: this.lastScreenTemp
       })
     }
@@ -975,7 +1114,7 @@ export class MusicSyncEngine {
         if (hue < 0) hue += 360
 
         const saturation = 0.88 + high * 0.12
-        const value = Math.max(0.1, energy * 0.85 + bass * 0.2)
+        const value = Math.min(1.0, Math.max(0.05, energy * 1.05 + bass * 0.25))
         return { h: hue, s: saturation, v: value }
       }
 
@@ -993,7 +1132,7 @@ export class MusicSyncEngine {
         return {
           h: baseColor.h,
           s: baseColor.s,
-          v: Math.max(0.12, energy * 0.9 + this.beatPulse * 0.2)
+          v: Math.min(1.0, Math.max(0.08, energy * 1.05 + this.beatPulse * 0.25))
         }
       }
 
@@ -1007,7 +1146,7 @@ export class MusicSyncEngine {
         return {
           h: color.h,
           s: Math.min(1, primaryColor.s + this.beatPulse * 0.2),
-          v: Math.max(0.08, energy * 0.6 + this.beatPulse * 0.5)
+          v: Math.min(1.0, Math.max(0.06, energy * 0.75 + this.beatPulse * 0.65))
         }
       }
 
@@ -1018,7 +1157,7 @@ export class MusicSyncEngine {
         return {
           h: curr.h,
           s: curr.s,
-          v: Math.max(0.1, energy * 0.8 + this.beatPulse * 0.3)
+          v: Math.min(1.0, Math.max(0.08, energy * 1.0 + this.beatPulse * 0.35))
         }
       }
 
@@ -1036,7 +1175,7 @@ export class MusicSyncEngine {
         return {
           h: ambientHsv.h,
           s: Math.max(0.5, ambientHsv.s * 0.85),
-          v: Math.max(0.15, energy * 0.7)
+          v: Math.min(1.0, Math.max(0.12, energy * 1.0))
         }
       }
 
@@ -1046,18 +1185,40 @@ export class MusicSyncEngine {
         let saturation: number
         let value: number
 
+        const screenLuminance = this.lastScreenHsv.v
+        const soundDrive = energy * 1.10 + this.beatPulse * 0.35
+        const isAudioActive = energy > 0.03 || this.beatPulse > 0.05
+
         if (screenRes.isDark) {
+          // Pitch-black or dark scene: relaxed ambient breathing
           saturation = 0.72
-          value = Math.max(0.18, 0.28 + energy * 0.15)
+          value = Math.min(0.60, Math.max(0.10, 0.15 + soundDrive * 0.30))
+        } else if (screenRes.isDarkGrey) {
+          // Grey or Black shades (VS Code, Dark Mode apps, Dark UI):
+          // User requested: "grey or black shades should have dimmed very dimmed colours for dark feel"
+          // Keep at bottom floor (minBrightness) with gentle audio reactivity:
+          saturation = 0.05
+          value = Math.max(0.05, Math.min(0.25, 0.06 + soundDrive * 0.20))
         } else if (screenRes.isWhiteOrGrey) {
-          // When screen is white or grey: true zero/low saturation (eliminates pink & green tint!)
+          // High-luminance daylight white
           saturation = Math.min(0.03, this.lastScreenHsv.s)
-          // Calibrate white brightness dynamically using sound/music energy (same as other modes):
-          value = Math.max(0.12, energy * 0.85 + this.beatPulse * 0.35)
+          // Audio energy & beat pulse dynamically drive white brightness
+          value = isAudioActive
+            ? Math.min(1.0, Math.max(0.05, soundDrive))
+            : Math.min(1.0, Math.max(0.15, screenLuminance * 0.80))
         } else {
-          // Natural color saturation:
-          saturation = Math.min(1.0, this.lastScreenHsv.s * 1.1)
-          value = Math.max(0.15, energy * 0.85 + this.beatPulse * 0.35)
+          // Saturated display content ("make the colours saturated a little to get the feeling"):
+          saturation = Math.min(1.0, Math.max(0.40, this.lastScreenHsv.s * 1.25 + 0.10))
+
+          // Full Audio-Reactive Dimming in Screen Ambilight mode:
+          // Sound drive and beat pulses dynamically modulate brightness between minBrightness and maxBrightness.
+          // When music is playing, soundDrive directly controls bulb dimming (from 15% to 100%).
+          // When PC audio is completely silent / paused, smoothly holds steady screen brightness.
+          if (isAudioActive) {
+            value = Math.min(1.0, Math.max(0.05, soundDrive))
+          } else {
+            value = Math.min(1.0, Math.max(0.15, screenLuminance * 0.75))
+          }
         }
 
         return {
@@ -1078,8 +1239,7 @@ export class MusicSyncEngine {
     const hsv = rgbToHsv(rawR, rawG, rawB)
 
     // For neutral / white / grey tones (low saturation):
-    // Do NOT attenuate green, which prevents false pink / magenta / violet shifts!
-    if (hsv.s < 0.18) {
+    if (hsv.s < 0.16) {
       return { r: rawR, g: rawG, b: rawB }
     }
 
@@ -1087,27 +1247,45 @@ export class MusicSyncEngine {
     const gN = rawG / 255.0
     const bN = rawB / 255.0
 
-    let rC = rN
-    let gC = gN
-    let bC = bN
-
-    // Only attenuate Green in the warm yellow/amber/chartreuse zone (Hue 20 to 85 deg)
-    // where the Green LED diode physically overpowers Red to look lime-green.
-    if (hsv.h >= 20 && hsv.h <= 85) {
-      const dist = Math.abs(hsv.h - 55) / 35.0 // 0 at pure yellow (55 deg), 1 at edges
-      const gFactor = 0.70 + 0.25 * dist // 0.70 at yellow, 0.95 at edges
-      gC = gN * gFactor
+    // 1. Pure Orange Anchor (Hue 14 to 36 deg):
+    // Strict green capping and ZERO blue so orange stays fiery, punchy orange (never lime, pink, or purple):
+    if (hsv.h >= 14 && hsv.h <= 36) {
+      const calibratedG = Math.min(gN, rN * 0.43)
+      return {
+        r: Math.min(255, Math.round(rN * 255)),
+        g: Math.min(255, Math.round(calibratedG * 255)),
+        b: 0
+      }
     }
 
-    const maxC = Math.max(rC, gC, bC)
+    // 2. Shades of Yellow Anchor (Hue 37 to 68 deg):
+    // Human eyes are 4x more sensitive to green LED diodes (555nm) than red (630nm).
+    // Clamping green to max 76% of red and ZERO blue completely eliminates lime-green, pink, or purple:
+    if (hsv.h > 36 && hsv.h <= 68) {
+      const calibratedG = Math.min(gN, rN * 0.76)
+      return {
+        r: Math.min(255, Math.round(rN * 255)),
+        g: Math.min(255, Math.round(calibratedG * 255)),
+        b: 0
+      }
+    }
+
+    // 3. Green to Lime transition (Hue 69 to 85 deg):
+    let gC = gN
+    if (hsv.h > 68 && hsv.h <= 85) {
+      const factor = 0.85 + 0.15 * ((hsv.h - 68) / 17.0)
+      gC = gN * factor
+    }
+
+    const maxC = Math.max(rN, gC, bN)
     const maxN = Math.max(rN, gN, bN)
 
     if (maxC > 0 && maxN > 0) {
       const scale = maxN / maxC
       return {
-        r: Math.min(255, Math.max(0, Math.round(rC * scale * 255))),
+        r: Math.min(255, Math.max(0, Math.round(rN * scale * 255))),
         g: Math.min(255, Math.max(0, Math.round(gC * scale * 255))),
-        b: Math.min(255, Math.max(0, Math.round(bC * scale * 255)))
+        b: Math.min(255, Math.max(0, Math.round(bN * scale * 255)))
       }
     }
     return { r: 0, g: 0, b: 0 }
@@ -1119,15 +1297,36 @@ export class MusicSyncEngine {
     // Ensure fresh DSP frame calculation prior to sending
     this.processAudioFrame()
 
+    // 1. Pure Black handling in Screen Ambilight mode: Turn bulb completely OFF
+    if (this.config.mode === 'screen' && this.isPureBlackScreen) {
+      if (this.lastSentState !== false) {
+        this.lastSentState = false
+        if (window.api && window.api.syncBulbColor) {
+          window.api.syncBulbColor({
+            r: 0,
+            g: 0,
+            b: 0,
+            dimming: 10,
+            state: false,
+            ip: this.config.targetIp || undefined
+          })
+        }
+      }
+      return
+    }
+
+    const wasOff = this.lastSentState === false
+    this.lastSentState = true
+
     if (this.config.mode === 'screen' && this.isWhiteOrGreyScreen) {
       // Send dedicated WHITE LED command to WiZ bulb:
       // temp (2700K - 6500K) activates high-CRI dual-white LEDs with ZERO green distortion!
       const temp = this.lastScreenTemp || 4800
       const dimming = this.currentDimming
 
-      // Dead-band check for white mode
+      // Dead-band check for white mode (skip only if not turning back on)
       const lastTemp = (this.lastSent as any).temp ?? 0
-      if (Math.abs(temp - lastTemp) < 50 && Math.abs(dimming - this.lastSent.dimming) < 3) {
+      if (!wasOff && Math.abs(temp - lastTemp) < 50 && Math.abs(dimming - this.lastSent.dimming) < 3) {
         return
       }
 
@@ -1141,6 +1340,7 @@ export class MusicSyncEngine {
           b: 255,
           temp,
           dimming,
+          state: true,
           ip: this.config.targetIp || undefined
         })
       }
@@ -1153,13 +1353,13 @@ export class MusicSyncEngine {
     const rgb = MusicSyncEngine.calibrateForLed(rawRgb.r, rawRgb.g, rawRgb.b)
     const dimming = this.currentDimming
 
-    // Dead-band check: skip sending if change is negligible
+    // Dead-band check: skip sending if change is negligible (unless turning back on from blackout)
     const deltaR = Math.abs(rgb.r - this.lastSent.r)
     const deltaG = Math.abs(rgb.g - this.lastSent.g)
     const deltaB = Math.abs(rgb.b - this.lastSent.b)
     const deltaDim = Math.abs(dimming - this.lastSent.dimming)
 
-    if (deltaR < 4 && deltaG < 4 && deltaB < 4 && deltaDim < 3) {
+    if (!wasOff && deltaR < 4 && deltaG < 4 && deltaB < 4 && deltaDim < 3) {
       return // skip redundant network packet
     }
 
@@ -1172,6 +1372,7 @@ export class MusicSyncEngine {
         g: rgb.g,
         b: rgb.b,
         dimming,
+        state: true,
         ip: this.config.targetIp || undefined
       })
     }

@@ -9,7 +9,7 @@ export interface IElectronAPI {
   getDesktopSources?: () => Promise<{ id: string; name: string }[]>
 
   // Active bulb operations
-  syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string; temp?: number }) => void
+  syncBulbColor: (data: { r: number; g: number; b: number; dimming?: number; ip?: string; temp?: number; state?: boolean }) => void
   toggleBulb: (targetIp?: string) => void
   setBrightness: (brightness: number, targetIp?: string) => void
   setBulbName: (name: string, ip?: string) => void

@@ -39,8 +39,11 @@ export default function MusicSync() {
   const [screenSources, setScreenSources] = useState<{ id: string; name: string }[]>([])
   const [selectedScreenId, setSelectedScreenId] = useState<string>('')
   const [liveScreenColor, setLiveScreenColor] = useState<{ r: number; g: number; b: number } | null>(null)
+  const [isPureBlack, setIsPureBlack] = useState<boolean>(false)
   const [isDarkScreen, setIsDarkScreen] = useState<boolean>(false)
+  const [isDarkGrey, setIsDarkGrey] = useState<boolean>(false)
   const [isWhiteOrGrey, setIsWhiteOrGrey] = useState<boolean>(false)
+  const [detectedColorMode, setDetectedColorMode] = useState<string>('vivid_chroma')
   const [screenTemp, setScreenTemp] = useState<number>(4800)
 
   const [sensitivity, setSensitivity] = useState<number>(1.2)
@@ -107,11 +110,20 @@ export default function MusicSync() {
       if (state.screenColor && now - lastUiColorTime > 120) {
         lastUiColorTime = now
         setLiveScreenColor(state.screenColor)
+        if (state.isPureBlack !== undefined) {
+          setIsPureBlack(state.isPureBlack)
+        }
         if (state.isDarkScreen !== undefined) {
           setIsDarkScreen(state.isDarkScreen)
         }
+        if (state.isDarkGreyScreen !== undefined) {
+          setIsDarkGrey(state.isDarkGreyScreen)
+        }
         if (state.isWhiteOrGrey !== undefined) {
           setIsWhiteOrGrey(state.isWhiteOrGrey)
+        }
+        if (state.detectedColorMode !== undefined) {
+          setDetectedColorMode(state.detectedColorMode)
         }
         if (state.screenTemp !== undefined) {
           setScreenTemp(state.screenTemp)
@@ -246,7 +258,7 @@ export default function MusicSync() {
         ctx.font = '600 12px Inter, sans-serif'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        const label = isActive ? `${dim}% Dim` : 'Ready'
+        const label = isActive ? (isPureBlack && mode === 'screen' ? 'Blackout (Off)' : (isDarkGrey && mode === 'screen' ? 'Dark Mode Dim' : `${dim}% Dim`)) : 'Ready'
         ctx.fillText(label, centerX, centerY)
 
         if (isBeat && isActive) {
@@ -505,27 +517,76 @@ export default function MusicSync() {
             {liveScreenColor && (
               <div className="flex items-center gap-2 text-xs text-neutral-200 bg-neutral-900/90 px-3 py-1 rounded-lg border border-cyan-500/30">
                 <span className="text-neutral-400">
-                  {isDarkScreen
-                    ? 'Ambient Moving Gradient (Dark Scene):'
-                    : isWhiteOrGrey
-                      ? 'Daylight White:'
-                      : 'Live Screen Color:'}
+                  {isPureBlack
+                    ? 'Pure Black Screen:'
+                    : isDarkGrey
+                      ? 'Dark Grey / Dark Feel:'
+                      : detectedColorMode === 'brown_to_yellow'
+                        ? 'Earth-Tone / Brown:'
+                        : detectedColorMode === 'pure_orange'
+                          ? 'Display Content:'
+                          : detectedColorMode === 'pure_yellow'
+                            ? 'Display Content:'
+                            : isDarkScreen
+                              ? 'Ambient Moving Gradient:'
+                              : isWhiteOrGrey
+                                ? 'Daylight White:'
+                                : 'Live Screen Color:'}
                 </span>
-                <span
-                  className={`w-4 h-4 rounded-full border border-white/40 shadow-sm inline-block transition-colors duration-300 ${
-                    isDarkScreen ? 'animate-pulse' : ''
-                  }`}
-                  style={{
-                    backgroundColor: isWhiteOrGrey
-                      ? '#ffffff'
-                      : `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})`
-                  }}
-                />
-                <span className="font-mono text-[11px] text-cyan-300 font-bold">
-                  {isWhiteOrGrey
-                    ? `${screenTemp}K White`
-                    : `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})`}
-                </span>
+                {isPureBlack ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3.5 h-3.5 rounded-full border border-neutral-600 bg-black inline-block shadow-sm" />
+                    <span className="font-mono text-[11px] text-amber-400 font-bold">
+                      Bulbs OFF
+                    </span>
+                  </div>
+                ) : isDarkGrey ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3.5 h-3.5 rounded-full border border-neutral-600 bg-neutral-800 inline-block shadow-sm" />
+                    <span className="font-mono text-[11px] text-neutral-300 font-bold">
+                      Dimmed (Dark Feel)
+                    </span>
+                  </div>
+                ) : detectedColorMode === 'brown_to_yellow' ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3.5 h-3.5 rounded-full border border-yellow-300 bg-[#ffb700] inline-block shadow-sm" />
+                    <span className="font-mono text-[11px] text-yellow-300 font-bold">
+                      Warm Golden Yellow
+                    </span>
+                  </div>
+                ) : detectedColorMode === 'pure_orange' ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3.5 h-3.5 rounded-full border border-orange-300 bg-[#ff6a00] inline-block shadow-sm" />
+                    <span className="font-mono text-[11px] text-orange-400 font-bold">
+                      Pure Vibrant Orange
+                    </span>
+                  </div>
+                ) : detectedColorMode === 'pure_yellow' ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3.5 h-3.5 rounded-full border border-yellow-300 bg-[#ffd700] inline-block shadow-sm" />
+                    <span className="font-mono text-[11px] text-yellow-300 font-bold">
+                      Sunshine Yellow
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <span
+                      className={`w-3.5 h-3.5 rounded-full border border-white/40 shadow-sm inline-block transition-colors duration-300 ${
+                        isDarkScreen ? 'animate-pulse' : ''
+                      }`}
+                      style={{
+                        backgroundColor: isWhiteOrGrey
+                          ? '#ffffff'
+                          : `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})`
+                      }}
+                    />
+                    <span className="font-mono text-[11px] text-cyan-300 font-bold">
+                      {isWhiteOrGrey
+                        ? `${screenTemp}K White`
+                        : `rgb(${liveScreenColor.r}, ${liveScreenColor.g}, ${liveScreenColor.b})`}
+                    </span>
+                  </>
+                )}
               </div>
             )}
           </div>
