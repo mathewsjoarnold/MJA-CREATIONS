@@ -1,4 +1,4 @@
-# WiZ APP 💡
+# WiZ APP WITH MUSIC SYNC💡
 
 > **Advanced Desktop App for controlling and synchronizing WiZ Smart Lighting**
 
